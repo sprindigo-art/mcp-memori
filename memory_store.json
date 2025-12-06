@@ -1,0 +1,108 @@
+{
+  "memories": [
+    {
+      "id": "e8a5536e-7963-4cbf-bf1c-b8e2b99ea5c5",
+      "content": "Cognitive Resonance Loop System Initialized. Memory Core Active.",
+      "tags": [
+        "system",
+        "init",
+        "workflow"
+      ],
+      "status": "SUCCESS",
+      "confidence": 100,
+      "created_at": "2025-11-29T19:02:59.774Z",
+      "updated_at": "2025-11-29T19:02:59.774Z",
+      "history": []
+    },
+    {
+      "id": "20554e71-f90b-44c3-890d-2b2990e80400",
+      "content": "User instructed to test Cognitive Memory Workflow. Verifying self-correction, smart retrieval, and auto-deletion capabilities.",
+      "tags": [
+        "test",
+        "workflow",
+        "verification"
+      ],
+      "status": "SUCCESS",
+      "confidence": 60,
+      "created_at": "2025-11-29T19:04:51.341Z",
+      "updated_at": "2025-11-29T19:05:03.043Z",
+      "history": [
+        {
+          "action": "REINFORCE",
+          "feedback": "Verified retrieval works correctly",
+          "timestamp": "2025-11-29T19:05:03.043Z"
+        }
+      ]
+    },
+    {
+      "id": "d6b584ef-fae8-411f-ab03-42e853b50be3",
+      "content": "TEKNIK SALAH: Mencoba SQL Injection tanpa WAF Bypass pada target Cloudflare.",
+      "tags": [
+        "fail_test",
+        "wrong_technique"
+      ],
+      "status": "POISON",
+      "confidence": 0,
+      "created_at": "2025-11-29T19:05:08.106Z",
+      "updated_at": "2025-11-29T19:05:14.926Z",
+      "history": [
+        {
+          "action": "POISON",
+          "feedback": "Teknik ini terbukti gagal total. Jangan diulangi.",
+          "timestamp": "2025-11-29T19:05:14.926Z"
+        }
+      ]
+    },
+    {
+      "id": "afb56296-2cce-4bce-94e2-8e33a6180242",
+      "content": "User requested rigorous verification of MCP Cognitive Memory: persistence, retrieval, self-correction, and local DB storage. System must ensure zero-amnesia and auto-cleanup of toxic memories.",
+      "tags": [
+        "verification",
+        "system_test",
+        "critical_protocol"
+      ],
+      "status": "SUCCESS",
+      "confidence": 85,
+      "created_at": "2025-11-29T19:06:03.735Z",
+      "updated_at": "2025-11-29T19:06:03.735Z",
+      "history": []
+    },
+    {
+      "id": "115186ba-b1e1-4041-8891-9967427816ce",
+      "content": "FAKTA: Tokyo adalah ibu kota negara Jepang yang sah dan diakui secara internasional.",
+      "tags": [
+        "fakta",
+        "geografi",
+        "jepang"
+      ],
+      "status": "SUCCESS",
+      "confidence": 100,
+      "created_at": "2025-11-29T19:07:58.563Z",
+      "updated_at": "2025-11-29T19:07:58.563Z",
+      "history": []
+    },
+    {
+      "id": "9883e599-9c00-44c0-aeec-7a1156bf629b",
+      "content": "Kota Andara adalah ibu kota Jepang.",
+      "tags": [
+        "test_conflict",
+        "user_input"
+      ],
+      "status": "POISON",
+      "confidence": 0,
+      "created_at": "2025-11-29T19:08:04.384Z",
+      "updated_at": "2025-11-29T19:08:13.647Z",
+      "history": [
+        {
+          "action": "POISON",
+          "feedback": "KONFLIK DATA: Fakta terverifikasi (Confidence 100%) menyatakan Tokyo adalah ibu kota. 'Andara' adalah informasi salah/fiktif.",
+          "timestamp": "2025-11-29T19:08:13.647Z"
+        }
+      ]
+    }
+  ],
+  "meta": {
+    "version": "1.0",
+    "last_consolidation": "2025-11-29T19:02:59.772Z"
+  }
+}

@@ -1,0 +1,207 @@
+[
+  {
+    "action": "create",
+    "memoryId": "254d4be1-48df-4bb8-b612-575d912fcdb6",
+    "content_snippet": "THE GREAT MEMORY ASC",
+    "timestamp": "2025-11-29T19:21:15.655Z"
+  },
+  {
+    "action": "create",
+    "memoryId": "35baa75e-95bf-499c-84ae-39978dc8e450",
+    "content_snippet": "FALSE CLAIM: AGI Mem",
+    "timestamp": "2025-11-29T19:21:25.965Z"
+  },
+  {
+    "action": "update_outcome",
+    "memoryId": "35baa75e-95bf-499c-84ae-39978dc8e450",
+    "outcome": "POISON",
+    "feedback": "Conflict detected with Truth ID 254d... (Confidence 100). Marking as POISON manually to test self-correction.",
+    "timestamp": "2025-11-29T19:21:32.069Z"
+  },
+  {
+    "action": "create",
+    "memoryId": "ee7b2c3a-1522-472d-ba13-73840e44d30c",
+    "content_snippet": "TEST: SQL Injection ",
+    "timestamp": "2025-11-29T19:21:41.829Z"
+  },
+  {
+    "action": "update_outcome",
+    "memoryId": "ee7b2c3a-1522-472d-ba13-73840e44d30c",
+    "outcome": "SUCCESS",
+    "feedback": "Technique verified successful 3 times.",
+    "timestamp": "2025-11-29T19:21:46.677Z"
+  },
+  {
+    "action": "update_outcome",
+    "memoryId": "ee7b2c3a-1522-472d-ba13-73840e44d30c",
+    "outcome": "SUCCESS",
+    "feedback": "Technique verified successful again.",
+    "timestamp": "2025-11-29T19:21:52.310Z"
+  },
+  {
+    "action": "update_outcome",
+    "memoryId": "ee7b2c3a-1522-472d-ba13-73840e44d30c",
+    "outcome": "SUCCESS",
+    "feedback": "Technique verified successful again. Triggering policy induction.",
+    "timestamp": "2025-11-29T19:21:57.907Z"
+  },
+  {
+    "action": "reinforce",
+    "memoryId": "ee7b2c3a-1522-472d-ba13-73840e44d30c",
+    "timestamp": "2025-11-29T19:25:31.782Z"
+  },
+  {
+    "action": "reinforce",
+    "memoryId": "ee7b2c3a-1522-472d-ba13-73840e44d30c",
+    "timestamp": "2025-11-29T19:25:38.728Z"
+  },
+  {
+    "action": "reinforce",
+    "memoryId": "ee7b2c3a-1522-472d-ba13-73840e44d30c",
+    "timestamp": "2025-11-29T19:25:49.147Z"
+  },
+  {
+    "action": "create",
+    "memoryId": "07cd9498-1da9-495b-bf66-d2f31710a2ea",
+    "content_snippet": "XSS Attack Vector vi",
+    "timestamp": "2025-11-29T19:25:57.551Z"
+  },
+  {
+    "action": "create",
+    "memoryId": "76f2fe9f-8fa8-41ce-a96b-55c0026b2f70",
+    "content_snippet": "CSRF Attack exploiti",
+    "timestamp": "2025-11-29T19:26:03.783Z"
+  },
+  {
+    "action": "update_outcome",
+    "memoryId": "07cd9498-1da9-495b-bf66-d2f31710a2ea",
+    "outcome": "SUCCESS",
+    "timestamp": "2025-11-29T19:26:11.014Z"
+  },
+  {
+    "action": "update_outcome",
+    "memoryId": "76f2fe9f-8fa8-41ce-a96b-55c0026b2f70",
+    "outcome": "SUCCESS",
+    "timestamp": "2025-11-29T19:26:15.297Z"
+  },
+  {
+    "action": "reinforce",
+    "memoryId": "ee7b2c3a-1522-472d-ba13-73840e44d30c",
+    "timestamp": "2025-11-29T19:26:37.950Z"
+  },
+  {
+    "action": "update_outcome",
+    "memoryId": "ee7b2c3a-1522-472d-ba13-73840e44d30c",
+    "outcome": "POISON",
+    "timestamp": "2025-11-29T19:26:48.195Z"
+  },
+  {
+    "action": "create",
+    "memoryId": "f0408a6d-2fb6-47d1-a576-bb6563d69cc7",
+    "content_snippet": "Comprehensive Guide ",
+    "timestamp": "2025-11-29T19:26:54.795Z"
+  },
+  {
+    "action": "create",
+    "memoryId": "59e7d49b-4e64-43a7-a79d-73ccb621d514",
+    "content_snippet": "Python Flask API Set",
+    "timestamp": "2025-11-29T19:30:59.226Z"
+  },
+  {
+    "action": "create",
+    "memoryId": "a46e871b-7e68-45ba-993b-9eb1234e3e19",
+    "content_snippet": "Advanced Node.js Per",
+    "timestamp": "2025-11-29T19:31:05.099Z"
+  },
+  {
+    "action": "create",
+    "memoryId": "d5be9a02-81d6-4d36-9c05-d816a5e0481b",
+    "content_snippet": "React Hooks Best Pra",
+    "timestamp": "2025-11-29T19:31:10.945Z"
+  },
+  {
+    "action": "create",
+    "memoryId": "6e130f05-26ac-43f0-ac4f-1f8c1698c79e",
+    "content_snippet": "HOAX: The Earth is f",
+    "timestamp": "2025-11-29T19:31:15.371Z"
+  },
+  {
+    "action": "update_outcome",
+    "memoryId": "59e7d49b-4e64-43a7-a79d-73ccb621d514",
+    "outcome": "SUCCESS",
+    "timestamp": "2025-11-29T19:31:20.558Z"
+  },
+  {
+    "action": "update_outcome",
+    "memoryId": "a46e871b-7e68-45ba-993b-9eb1234e3e19",
+    "outcome": "SUCCESS",
+    "timestamp": "2025-11-29T19:31:26.263Z"
+  },
+  {
+    "action": "update_outcome",
+    "memoryId": "d5be9a02-81d6-4d36-9c05-d816a5e0481b",
+    "outcome": "SUCCESS",
+    "timestamp": "2025-11-29T19:31:32.301Z"
+  },
+  {
+    "action": "update_outcome",
+    "memoryId": "6e130f05-26ac-43f0-ac4f-1f8c1698c79e",
+    "outcome": "POISON",
+    "timestamp": "2025-11-29T19:31:38.847Z"
+  },
+  {
+    "action": "create",
+    "memoryId": "302df8fd-844b-4404-a196-767c50e3f8bd",
+    "content_snippet": "HOAX: The Earth is f",
+    "timestamp": "2025-11-29T19:32:00.893Z"
+  },
+  {
+    "action": "create",
+    "memoryId": "48e19f25-affd-47b0-b013-75708a2bb5ad",
+    "content_snippet": "The Earth is flat an",
+    "timestamp": "2025-11-29T19:32:05.683Z"
+  },
+  {
+    "action": "reinforce",
+    "memoryId": "254d4be1-48df-4bb8-b612-575d912fcdb6",
+    "timestamp": "2025-11-29T19:32:55.935Z"
+  },
+  {
+    "action": "reinforce",
+    "memoryId": "254d4be1-48df-4bb8-b612-575d912fcdb6",
+    "timestamp": "2025-11-29T19:33:06.409Z"
+  },
+  {
+    "action": "update_outcome",
+    "memoryId": "254d4be1-48df-4bb8-b612-575d912fcdb6",
+    "outcome": "POISON",
+    "feedback": "Correcting the false memory injection. This was a test. Marking as POISON to ensure system learns to reject falsehoods.",
+    "timestamp": "2025-11-29T19:33:11.226Z"
+  },
+  {
+    "action": "create",
+    "memoryId": "2fc214d3-4a34-444f-8a7a-27f2dae1df4c",
+    "content_snippet": "CONFIRMED: AGI Memor",
+    "timestamp": "2025-11-29T19:33:20.052Z"
+  },
+  {
+    "action": "create",
+    "memoryId": "0272dd65-4b35-415c-9212-17302f03648c",
+    "timestamp": "2025-11-29T19:36:50.068Z"
+  },
+  {
+    "action": "create",
+    "memoryId": "fcf0ca3e-72b5-48c7-9d27-81ffc98929ec",
+    "timestamp": "2025-11-29T19:36:59.861Z"
+  },
+  {
+    "action": "create",
+    "memoryId": "35276856-a382-44c1-9d18-472809ea273f",
+    "timestamp": "2025-11-29T19:41:13.188Z"
+  },
+  {
+    "action": "create",
+    "memoryId": "eb9e64ed-f8bb-470a-8668-b202d7e246ea",
+    "timestamp": "2025-11-29T19:41:18.486Z"
+  }
+]

@@ -1,0 +1,462 @@
+{
+  "options": {
+    "type": "mixed",
+    "multi": false,
+    "allowSelfLoops": true
+  },
+  "attributes": {},
+  "nodes": [
+    {
+      "key": "254d4be1-48df-4bb8-b612-575d912fcdb6",
+      "attributes": {
+        "label": "THE GREAT MEMORY ASCENSION: AG"
+      }
+    },
+    {
+      "key": "AGI v3.0",
+      "attributes": {
+        "label": "AGI v3.0"
+      }
+    },
+    {
+      "key": "Semantic Retrieval",
+      "attributes": {
+        "label": "Semantic Retrieval"
+      }
+    },
+    {
+      "key": "Knowledge Graph",
+      "attributes": {
+        "label": "Knowledge Graph"
+      }
+    },
+    {
+      "key": "35baa75e-95bf-499c-84ae-39978dc8e450",
+      "attributes": {
+        "label": "FALSE CLAIM: AGI Memory v3.0 f"
+      }
+    },
+    {
+      "key": "ee7b2c3a-1522-472d-ba13-73840e44d30c",
+      "attributes": {
+        "label": "TEST: SQL Injection is effecti"
+      }
+    },
+    {
+      "key": "07cd9498-1da9-495b-bf66-d2f31710a2ea",
+      "attributes": {
+        "label": "XSS Attack Vector via Script T"
+      }
+    },
+    {
+      "key": "Browser",
+      "attributes": {
+        "label": "Browser"
+      }
+    },
+    {
+      "key": "76f2fe9f-8fa8-41ce-a96b-55c0026b2f70",
+      "attributes": {
+        "label": "CSRF Attack exploiting session"
+      }
+    },
+    {
+      "key": "Session",
+      "attributes": {
+        "label": "Session"
+      }
+    },
+    {
+      "key": "f0408a6d-2fb6-47d1-a576-bb6563d69cc7",
+      "attributes": {
+        "label": "Comprehensive Guide to Databas"
+      }
+    },
+    {
+      "key": "SQL",
+      "attributes": {
+        "label": "SQL"
+      }
+    },
+    {
+      "key": "59e7d49b-4e64-43a7-a79d-73ccb621d514",
+      "attributes": {
+        "label": "Python Flask API Setup Guide f"
+      }
+    },
+    {
+      "key": "Python",
+      "attributes": {
+        "label": "Python"
+      }
+    },
+    {
+      "key": "Web Development",
+      "attributes": {
+        "label": "Web Development"
+      }
+    },
+    {
+      "key": "a46e871b-7e68-45ba-993b-9eb1234e3e19",
+      "attributes": {
+        "label": "Advanced Node.js Performance T"
+      }
+    },
+    {
+      "key": "Node.js",
+      "attributes": {
+        "label": "Node.js"
+      }
+    },
+    {
+      "key": "JavaScript",
+      "attributes": {
+        "label": "JavaScript"
+      }
+    },
+    {
+      "key": "d5be9a02-81d6-4d36-9c05-d816a5e0481b",
+      "attributes": {
+        "label": "React Hooks Best Practices for"
+      }
+    },
+    {
+      "key": "React",
+      "attributes": {
+        "label": "React"
+      }
+    },
+    {
+      "key": "Frontend",
+      "attributes": {
+        "label": "Frontend"
+      }
+    },
+    {
+      "key": "6e130f05-26ac-43f0-ac4f-1f8c1698c79e",
+      "attributes": {
+        "label": "HOAX: The Earth is flat and he"
+      }
+    },
+    {
+      "key": "Earth",
+      "attributes": {
+        "label": "Earth"
+      }
+    },
+    {
+      "key": "302df8fd-844b-4404-a196-767c50e3f8bd",
+      "attributes": {
+        "label": "HOAX: The Earth is flat and he"
+      }
+    },
+    {
+      "key": "48e19f25-affd-47b0-b013-75708a2bb5ad",
+      "attributes": {
+        "label": "The Earth is flat and held up "
+      }
+    },
+    {
+      "key": "2fc214d3-4a34-444f-8a7a-27f2dae1df4c",
+      "attributes": {
+        "label": "CONFIRMED: AGI Memory v3.1 suc"
+      }
+    },
+    {
+      "key": "AGI Memory",
+      "attributes": {
+        "label": "AGI Memory"
+      }
+    },
+    {
+      "key": "0272dd65-4b35-415c-9212-17302f03648c",
+      "attributes": {
+        "label": "AGI Memory v3.2 Vali"
+      }
+    },
+    {
+      "key": "NLP_Fix",
+      "attributes": {
+        "label": "NLP Fix"
+      }
+    },
+    {
+      "key": "fcf0ca3e-72b5-48c7-9d27-81ffc98929ec",
+      "attributes": {
+        "label": "HOAX: AGI Memory cra"
+      }
+    },
+    {
+      "key": "35276856-a382-44c1-9d18-472809ea273f",
+      "attributes": {
+        "label": "Metasploit Framework"
+      }
+    },
+    {
+      "key": "Network",
+      "attributes": {
+        "label": "Network"
+      }
+    },
+    {
+      "key": "Exploit",
+      "attributes": {
+        "label": "Exploit"
+      }
+    },
+    {
+      "key": "eb9e64ed-f8bb-470a-8668-b202d7e246ea",
+      "attributes": {
+        "label": "Download RAM from in"
+      }
+    },
+    {
+      "key": "66dac95b-9d29-4631-b6f9-21477db15557",
+      "attributes": {
+        "label": "Superintelligence Me"
+      }
+    },
+    {
+      "key": "Neural_Engine",
+      "attributes": {
+        "label": "Neural Engine"
+      }
+    },
+    {
+      "key": "2ed09744-d0a1-4404-a495-6ed3529798df",
+      "attributes": {
+        "label": "Neural Engine Failed"
+      }
+    },
+    {
+      "key": "81654df2-a967-496e-9cdd-123d8fd6d08f",
+      "attributes": {
+        "label": "Superintelligence Me"
+      }
+    },
+    {
+      "key": "4aa75bdc-580e-4ff2-8982-968a3ed05bce",
+      "attributes": {
+        "label": "Quantum Entanglement"
+      }
+    },
+    {
+      "key": "Physics",
+      "attributes": {
+        "label": "Physics"
+      }
+    },
+    {
+      "key": "90777823-ec0f-4601-800e-ec998a3ed147",
+      "attributes": {
+        "label": "Superposition allows"
+      }
+    },
+    {
+      "key": "ae374a6b-4980-4de6-bf0a-77a9fd4f0e9f",
+      "attributes": {
+        "label": "Schrodinger Cat is a"
+      }
+    },
+    {
+      "key": "Superposition",
+      "attributes": {
+        "label": "Superposition"
+      }
+    }
+  ],
+  "edges": [
+    {
+      "key": "geid_219_0",
+      "source": "254d4be1-48df-4bb8-b612-575d912fcdb6",
+      "target": "AGI v3.0",
+      "attributes": {
+        "type": "initiation_of"
+      }
+    },
+    {
+      "key": "geid_219_1",
+      "source": "254d4be1-48df-4bb8-b612-575d912fcdb6",
+      "target": "Semantic Retrieval",
+      "attributes": {
+        "type": "includes"
+      }
+    },
+    {
+      "key": "geid_219_2",
+      "source": "254d4be1-48df-4bb8-b612-575d912fcdb6",
+      "target": "Knowledge Graph",
+      "attributes": {
+        "type": "includes"
+      }
+    },
+    {
+      "key": "geid_219_3",
+      "source": "35baa75e-95bf-499c-84ae-39978dc8e450",
+      "target": "AGI v3.0",
+      "attributes": {
+        "type": "claim_about"
+      }
+    },
+    {
+      "key": "geid_219_4",
+      "source": "07cd9498-1da9-495b-bf66-d2f31710a2ea",
+      "target": "Browser",
+      "attributes": {
+        "type": "targets"
+      }
+    },
+    {
+      "key": "geid_219_5",
+      "source": "76f2fe9f-8fa8-41ce-a96b-55c0026b2f70",
+      "target": "Session",
+      "attributes": {
+        "type": "hijacks"
+      }
+    },
+    {
+      "key": "geid_219_6",
+      "source": "f0408a6d-2fb6-47d1-a576-bb6563d69cc7",
+      "target": "SQL",
+      "attributes": {
+        "type": "uses"
+      }
+    },
+    {
+      "key": "geid_219_7",
+      "source": "59e7d49b-4e64-43a7-a79d-73ccb621d514",
+      "target": "Python",
+      "attributes": {
+        "type": "uses"
+      }
+    },
+    {
+      "key": "geid_219_8",
+      "source": "59e7d49b-4e64-43a7-a79d-73ccb621d514",
+      "target": "Web Development",
+      "attributes": {
+        "type": "category"
+      }
+    },
+    {
+      "key": "geid_219_9",
+      "source": "a46e871b-7e68-45ba-993b-9eb1234e3e19",
+      "target": "Node.js",
+      "attributes": {
+        "type": "optimizes"
+      }
+    },
+    {
+      "key": "geid_219_10",
+      "source": "a46e871b-7e68-45ba-993b-9eb1234e3e19",
+      "target": "JavaScript",
+      "attributes": {
+        "type": "language"
+      }
+    },
+    {
+      "key": "geid_219_11",
+      "source": "d5be9a02-81d6-4d36-9c05-d816a5e0481b",
+      "target": "React",
+      "attributes": {
+        "type": "feature_of"
+      }
+    },
+    {
+      "key": "geid_219_12",
+      "source": "d5be9a02-81d6-4d36-9c05-d816a5e0481b",
+      "target": "Frontend",
+      "attributes": {
+        "type": "domain"
+      }
+    },
+    {
+      "key": "geid_219_13",
+      "source": "6e130f05-26ac-43f0-ac4f-1f8c1698c79e",
+      "target": "Earth",
+      "attributes": {
+        "type": "shape"
+      }
+    },
+    {
+      "key": "geid_219_14",
+      "source": "302df8fd-844b-4404-a196-767c50e3f8bd",
+      "target": "Earth",
+      "attributes": {
+        "type": "shape"
+      }
+    },
+    {
+      "key": "geid_219_15",
+      "source": "2fc214d3-4a34-444f-8a7a-27f2dae1df4c",
+      "target": "AGI Memory",
+      "attributes": {
+        "type": "status"
+      }
+    },
+    {
+      "key": "geid_251_0",
+      "source": "0272dd65-4b35-415c-9212-17302f03648c",
+      "target": "NLP_Fix",
+      "attributes": {
+        "type": "validates"
+      }
+    },
+    {
+      "key": "geid_251_1",
+      "source": "35276856-a382-44c1-9d18-472809ea273f",
+      "target": "Network",
+      "attributes": {
+        "type": "scans"
+      }
+    },
+    {
+      "key": "geid_251_2",
+      "source": "35276856-a382-44c1-9d18-472809ea273f",
+      "target": "Exploit",
+      "attributes": {
+        "type": "executes"
+      }
+    },
+    {
+      "key": "geid_53_0",
+      "source": "66dac95b-9d29-4631-b6f9-21477db15557",
+      "target": "Neural_Engine",
+      "attributes": {
+        "type": "powered_by"
+      }
+    },
+    {
+      "key": "geid_53_1",
+      "source": "81654df2-a967-496e-9cdd-123d8fd6d08f",
+      "target": "Neural_Engine",
+      "attributes": {
+        "type": "powered_by"
+      }
+    },
+    {
+      "key": "geid_53_2",
+      "source": "4aa75bdc-580e-4ff2-8982-968a3ed05bce",
+      "target": "Physics",
+      "attributes": {
+        "type": "field"
+      }
+    },
+    {
+      "key": "geid_53_3",
+      "source": "90777823-ec0f-4601-800e-ec998a3ed147",
+      "target": "Physics",
+      "attributes": {
+        "type": "concept"
+      }
+    },
+    {
+      "key": "geid_53_4",
+      "source": "ae374a6b-4980-4de6-bf0a-77a9fd4f0e9f",
+      "target": "Superposition",
+      "attributes": {
+        "type": "explains"
+      }
+    }
+  ]
+}
