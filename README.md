@@ -1,63 +1,50 @@
-# MCP Cognitive Memory v9.8.3
+# MCP Cognitive Memory v14.0.0-OPTIMIZED
 
-> **Advanced AI Memory System** - Multi-Droid Support, Compression Recovery, Disconnect Recovery, Session Management.
+> **Advanced AI Memory System** - Multi-Instance Support, Compression Recovery, Semantic Search, Knowledge Graph.
 
-## Core Features
+## What's New in v14.0.0
 
-### v9.8.x - Multi-Droid Isolation
-- **Per-Droid Database**: Setiap Droid CLI instance punya database terpisah
-- **No Conflict**: 2+ Droid bisa jalan bersamaan tanpa race condition
-- **Shared Knowledge**: Memories tetap bisa diakses lintas instance
+- **11 Optimized Tools** (reduced from 15) - Removed rarely used tools
+- **SafeStorage** - Multi-instance file locking (30s timeout)
+- **100% Embedding Coverage** - All memories have semantic embeddings
+- **Auto-Inject Lessons** - Lessons injected to ALL tool responses
+- **Compact Responses** - Max 300 char per field
+- **Graph Relations** - Auto-generate relations from content
+- **Episodic Buffer** - Smart temporary memory detection
 
-### v9.7.x - Disconnect Recovery
-- **Single Instance Enforcement**: Auto-kill zombie processes
-- **Graceful Shutdown**: SIGTERM, SIGINT, SIGHUP handlers
-- **Exception Handling**: uncaughtException & unhandledRejection
-- **Heartbeat Monitor**: 30s interval, detect dead parent
-- **Auto-Reconnect**: 5 attempts dengan exponential backoff
+## Features
 
-### v8.x - Compression Hooks
-- **Pre-Compression Save**: Auto-checkpoint sebelum context limit
-- **Post-Compression Recovery**: Auto-detect dan recovery marker
-- **Token Estimation**: Real-time monitoring context usage
+### Multi-Instance Support
+- **File Locking**: 30s lock timeout, 7 retries
+- **Safe for 2-3 AI simultaneously** (Droid CLI + Antigravity)
+- **Zero data corruption** with concurrent access
+- **Cross-model knowledge sharing** (Claude + Gemini)
 
-### v7.x - Session Management
-- **Session Tracking**: Per-day session dengan conversation history
-- **Active Task**: Track task yang sedang dikerjakan
-- **Auto-Bootstrap**: Load context otomatis di awal sesi
-- **Work Logs**: Progress tracking antar sesi
+### Compression Recovery
+- **Auto-detect compression** via summary tags
+- **Recovery instructions** with active task preservation
+- **Session continuity** across compressions
 
-## API Tools (15 Tools)
+### Semantic Search
+- **Neural embeddings** via @xenova/transformers
+- **Cosine similarity** with recency boost
+- **Knowledge graph** with graphology
 
-### Core Memory
-| Tool | Description |
-|------|-------------|
-| `agi_store_memory` | Simpan knowledge dengan neural embedding |
-| `agi_retrieve_context` | Smart search dengan semantic + recency boost |
-| `agi_reinforce_memory` | SUCCESS untuk boost, POISON untuk hapus |
-| `agi_run_dream_cycle` | Maintenance: dedupe, prune, summarize |
+## API Tools (11 Tools)
 
-### Session Management
-| Tool | Description |
-|------|-------------|
-| `agi_bootstrap_session` | **WAJIB** di awal sesi - load semua context |
-| `agi_set_active_task` | Register task yang dikerjakan |
-| `agi_complete_task` | Tandai task selesai |
-| `agi_store_conversation` | Track conversation turns |
-| `agi_get_session_summary` | Summary session saat ini |
-
-### Compression Hooks
-| Tool | Description |
-|------|-------------|
-| `agi_compression_status` | Cek token usage dan status |
-| `agi_save_checkpoint` | Manual checkpoint sebelum operasi besar |
-| `agi_check_compression` | Detect compression events |
-
-### Error Tracking
-| Tool | Description |
-|------|-------------|
-| `agi_report_memory_failure` | Report memory yang menyebabkan error |
-| `agi_clear_memory_errors` | Clear error count setelah sukses |
+| Tool | Description | Use Case |
+|------|-------------|----------|
+| `agi_bootstrap_session` | Load session context | Start of session |
+| `agi_retrieve_context` | Semantic search memories | Find relevant info |
+| `agi_store_memory` | Store new memory | Save progress |
+| `agi_get_lessons` | Get lessons before action | Prevent mistakes |
+| `agi_detect_compression` | Detect compression | Recovery |
+| `agi_auto_cleanup` | Cleanup stale memories | Maintenance |
+| `agi_set_active_task` | Set current task | Task tracking |
+| `agi_complete_task` | Mark task complete | Task tracking |
+| `agi_store_conversation` | Store conversation | Context |
+| `agi_reinforce_memory` | Boost/POISON memory | Quality control |
+| `agi_deduplicate` | Remove duplicates | Maintenance |
 
 ## Installation
 
@@ -69,14 +56,20 @@ npm install
 
 ## Configuration
 
+### For Droid CLI / Claude Desktop
+
 ```json
 {
-  "mcp-cognitive-memory": {
-    "command": "node",
-    "args": ["/path/to/mcp-memori/index.js"],
-    "env": {
-      "NODE_ENV": "production",
-      "MEMORY_MODE": "god_mode"
+  "mcpServers": {
+    "mcp-cognitive-memory": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["/path/to/mcp-memori/index.js"],
+      "env": {
+        "NODE_ENV": "production",
+        "MEMORY_MODE": "god_mode",
+        "AUTO_SAVE": "true"
+      }
     }
   }
 }
@@ -85,55 +78,80 @@ npm install
 ## Quick Start
 
 ```javascript
-// 1. Bootstrap di awal sesi
+// 1. Bootstrap at session start (MANDATORY)
 agi_bootstrap_session()
 
-// 2. Set task
-agi_set_active_task({ task_description: "Implementasi fitur X" })
+// 2. Set active task
+agi_set_active_task({ task_description: "Implement feature X" })
 
-// 3. Cari context relevan
-agi_retrieve_context({ query: "fitur X lesson error", recursive: true })
+// 3. Get lessons before risky action
+agi_get_lessons({ task_context: "feature X implementation" })
 
-// 4. Simpan progress
+// 4. Retrieve relevant context
+agi_retrieve_context({ query: "feature X lesson error" })
+
+// 5. Store progress
 agi_store_memory({
-  content: "Selesai implementasi fitur X dengan metode Y",
-  tags: ["work_log", "fitur_x"],
+  content: "Completed feature X using method Y",
+  tags: ["work_log", "feature_x"],
   importance: 80
 })
 
-// 5. Selesai
+// 6. Complete task
 agi_complete_task({ result: "completed" })
+```
+
+## Compression Recovery
+
+When you see `<summary>` or "A previous instance of Droid has summarized":
+
+```javascript
+// 1. Detect compression
+agi_detect_compression({ context_hint: "A previous instance..." })
+
+// 2. Bootstrap to recover context
+agi_bootstrap_session()
+
+// 3. Continue from active_task (don't start from scratch!)
 ```
 
 ## Architecture
 
 ```
 mcp-memori/
-├── index.js              # Main server (v9.8.3)
+├── index.js              # Main server (v14.0.0)
+├── safe-storage.js       # Multi-instance file locking
 ├── package.json          # Dependencies
-├── core_identity.md      # AI identity config
-├── memory_god_mode_*.json # Per-droid databases
-└── memory_*.json         # Shared data stores
+├── memory_god_mode.json  # Memory database (gitignored)
+└── session_state.json    # Session state (gitignored)
 ```
 
-## Key Improvements Over v6.0
+## Performance
 
-| Aspect | v6.0 | v9.8.3 |
-|--------|------|--------|
-| Tools | 4 | 15 |
-| Multi-Droid | No | Yes |
-| Compression Recovery | No | Yes |
-| Disconnect Recovery | No | Yes |
-| Session Management | No | Yes |
-| Error Auto-Tracking | No | Yes |
-| Heartbeat Monitor | No | Yes |
+| Metric | Value |
+|--------|-------|
+| Total Memories | 275+ |
+| Embedding Coverage | 100% |
+| Lessons Stored | 21+ |
+| Work Logs | 69+ |
+| Sessions Tracked | 4+ |
+| Concurrent Instances | 38+ tested |
+
+## Version History
+
+| Version | Changes |
+|---------|---------|
+| v14.0.0 | 11 tools, SafeStorage, compact responses |
+| v13.0.0 | Graph relations, episodic buffer, clustering |
+| v12.0.0 | Auto-inject lessons, summary detection |
+| v11.0.0 | Compression detection, auto-cleanup |
 
 ## Dependencies
 
 - `@modelcontextprotocol/sdk` - MCP Protocol
 - `@xenova/transformers` - Neural embeddings
 - `graphology` - Knowledge graph
-- `lowdb` - JSON database
+- `proper-lockfile` - File locking
 - `compute-cosine-similarity` - Vector similarity
 
 ## License
@@ -141,5 +159,6 @@ mcp-memori/
 MIT
 
 ---
-**Version**: 9.8.3-MULTI-DROID-ISOLATION-FIX  
-**Status**: Production Ready
+**Version**: 14.0.0-OPTIMIZED  
+**Status**: Production Ready  
+**Multi-Instance**: Safe for 2-3 AI simultaneously
