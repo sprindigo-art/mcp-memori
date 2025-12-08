@@ -9,14 +9,655 @@ import fs from "fs";
 import graphology from "graphology";
 import { pipeline } from "@xenova/transformers";
 import similarity from "compute-cosine-similarity";
-import { JSONFilePreset } from 'lowdb/node';
+import SafeLowDB from './safe-storage.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// --- VERSION 7.1.0 UPGRADE: AUTO-BOOTSTRAP & ENHANCED REMINDERS ---
-const VERSION = "7.1.0";
+// --- VERSION 13.0.0 UPGRADE: ADVANCED MEMORY OPTIMIZATION ---
+// CHANGES FROM v12.0:
+// - AUTO-GENERATE GRAPH RELATIONS dari content (NLP extraction)
+// - SMART EPISODIC BUFFER dengan auto-detection
+// - EMBEDDING CLUSTERING tool untuk group similar memories
+// - PREDICTIVE RETRIEVAL berdasarkan access patterns
+// - OPTIMIZED SEMANTIC DEDUPLICATION dengan dynamic threshold
+// - All v12.0 features retained (compact response, auto-inject lessons)
+const VERSION = "14.0.0-OPTIMIZED"; // Reduced from 15 to 11 tools
 
-// --- DB SETUP (LowDB v7) ---
+// --- SESSION STATE FILE (Cross-MCP Sync) ---
+const SESSION_STATE_FILE = path.join(__dirname, 'session_state.json');
+
+// Session state for enforcement
+let sessionState = {
+    bootstrap_called: false,
+    bootstrap_timestamp: null,
+    session_id: null,
+    active_task: null,
+    tool_calls_before_bootstrap: 0,
+    instance_id: `${process.pid}_${Date.now()}`
+};
+
+// Load or create session state
+function loadSessionState() {
+    try {
+        if (fs.existsSync(SESSION_STATE_FILE)) {
+            const data = JSON.parse(fs.readFileSync(SESSION_STATE_FILE, 'utf-8'));
+            // Only restore if same day (reset daily)
+            const today = new Date().toISOString().split('T')[0];
+            if (data.date === today) {
+                sessionState = { ...sessionState, ...data };
+                console.error(`[MCP-MEMORY v${VERSION}] Session state loaded: bootstrap=${data.bootstrap_called}`);
+            } else {
+                // New day, reset state
+                sessionState.bootstrap_called = false;
+                saveSessionState();
+                console.error(`[MCP-MEMORY v${VERSION}] New day - session state reset`);
+            }
+        }
+    } catch (e) {
+        console.error(`[MCP-MEMORY v${VERSION}] Session state load error: ${e.message}`);
+    }
+}
+
+function saveSessionState() {
+    try {
+        sessionState.date = new Date().toISOString().split('T')[0];
+        sessionState.last_updated = new Date().toISOString();
+        fs.writeFileSync(SESSION_STATE_FILE, JSON.stringify(sessionState, null, 2));
+    } catch (e) {
+        console.error(`[MCP-MEMORY v${VERSION}] Session state save error: ${e.message}`);
+    }
+}
+
+// Check if bootstrap was called
+function isBootstrapCalled() {
+    return sessionState.bootstrap_called === true;
+}
+
+// Mark bootstrap as called
+function markBootstrapCalled(sessionId) {
+    sessionState.bootstrap_called = true;
+    sessionState.bootstrap_timestamp = new Date().toISOString();
+    sessionState.session_id = sessionId;
+    saveSessionState();
+    console.error(`[MCP-MEMORY v${VERSION}] Bootstrap marked as called`);
+}
+
+// Track tool calls before bootstrap (for enforcement)
+function trackPreBootstrapCall(toolName) {
+    if (!sessionState.bootstrap_called) {
+        sessionState.tool_calls_before_bootstrap++;
+        saveSessionState();
+        console.error(`[MCP-MEMORY v${VERSION}] WARNING: ${toolName} called before bootstrap (count: ${sessionState.tool_calls_before_bootstrap})`);
+    }
+}
+
+// Initialize session state on startup
+loadSessionState();
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// v10.0 COMPRESSION DETECTION
+// ═══════════════════════════════════════════════════════════════════════════════
+const COMPRESSION_INDICATORS = [
+    '<summary>',
+    'A previous instance of Droid has summarized',
+    'Conversation history has been compressed',
+    'summaryText',
+    'compressed conversation'
+];
+
+function detectCompression(contextHint = '') {
+    // Check if any compression indicator is present
+    for (const indicator of COMPRESSION_INDICATORS) {
+        if (contextHint.toLowerCase().includes(indicator.toLowerCase())) {
+            return {
+                detected: true,
+                indicator: indicator,
+                recovery_required: true
+            };
+        }
+    }
+    return { detected: false, indicator: null, recovery_required: false };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// v13.0 OPTIMIZATION 1: AUTO-GENERATE GRAPH RELATIONS FROM CONTENT
+// ═══════════════════════════════════════════════════════════════════════════════
+function extractRelationsFromContent(content, tags = []) {
+    const relations = [];
+    const contentLower = content.toLowerCase();
+    
+    // Pattern-based relation extraction
+    const patterns = [
+        { regex: /relates?\s+to\s+([a-zA-Z0-9_\-\s]+)/gi, type: 'relates_to' },
+        { regex: /depends?\s+on\s+([a-zA-Z0-9_\-\s]+)/gi, type: 'depends_on' },
+        { regex: /leads?\s+to\s+([a-zA-Z0-9_\-\s]+)/gi, type: 'leads_to' },
+        { regex: /caused?\s+by\s+([a-zA-Z0-9_\-\s]+)/gi, type: 'caused_by' },
+        { regex: /similar\s+to\s+([a-zA-Z0-9_\-\s]+)/gi, type: 'similar_to' },
+        { regex: /part\s+of\s+([a-zA-Z0-9_\-\s]+)/gi, type: 'part_of' },
+        { regex: /uses?\s+([a-zA-Z0-9_\-\s]+)/gi, type: 'uses' },
+        { regex: /implements?\s+([a-zA-Z0-9_\-\s]+)/gi, type: 'implements' },
+        { regex: /exploits?\s+([a-zA-Z0-9_\-\s]+)/gi, type: 'exploits' },
+        { regex: /bypasses?\s+([a-zA-Z0-9_\-\s]+)/gi, type: 'bypasses' }
+    ];
+    
+    for (const pattern of patterns) {
+        let match;
+        while ((match = pattern.regex.exec(content)) !== null) {
+            const target = match[1].trim().substring(0, 50);
+            if (target.length > 2 && !relations.find(r => r.target === target)) {
+                relations.push({ target, type: pattern.type });
+            }
+        }
+    }
+    
+    // Auto-link to tags as concepts
+    tags.forEach(tag => {
+        if (tag.length > 2 && !['work_log', 'lesson', 'mistake', 'EPISODIC'].includes(tag)) {
+            if (!relations.find(r => r.target === tag)) {
+                relations.push({ target: tag, type: 'tagged_with' });
+            }
+        }
+    });
+    
+    return relations.slice(0, 10); // Limit to 10 relations
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// v13.0 OPTIMIZATION 2: SMART EPISODIC BUFFER DETECTION
+// ═══════════════════════════════════════════════════════════════════════════════
+function shouldUseEpisodicBuffer(content, tags = []) {
+    // Auto-detect if memory should go to episodic buffer first
+    const episodicIndicators = [
+        /^test/i, /testing/i, /experiment/i, /trying/i, /attempt/i,
+        /draft/i, /temp/i, /temporary/i, /wip/i, /work.?in.?progress/i
+    ];
+    
+    const permanentIndicators = [
+        /lesson/i, /mistake/i, /success/i, /complete/i, /final/i,
+        /verified/i, /confirmed/i, /critical/i, /important/i
+    ];
+    
+    // Check tags for permanent indicators
+    if (tags.some(t => ['lesson', 'mistake', 'critical', 'work_log', 'CORE_IDENTITY'].includes(t))) {
+        return false; // Direct to permanent storage
+    }
+    
+    // Check content for episodic indicators
+    const hasEpisodic = episodicIndicators.some(p => p.test(content));
+    const hasPermanent = permanentIndicators.some(p => p.test(content));
+    
+    return hasEpisodic && !hasPermanent;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// v13.0 OPTIMIZATION 3: EMBEDDING CLUSTERING
+// ═══════════════════════════════════════════════════════════════════════════════
+async function clusterMemories(threshold = 0.80) {
+    const vectors = db.data.vectors.filter(v => v.embedding && Array.isArray(v.embedding));
+    const clusters = [];
+    const assigned = new Set();
+    
+    for (let i = 0; i < vectors.length; i++) {
+        if (assigned.has(vectors[i].id)) continue;
+        
+        const cluster = [vectors[i]];
+        assigned.add(vectors[i].id);
+        
+        for (let j = i + 1; j < vectors.length; j++) {
+            if (assigned.has(vectors[j].id)) continue;
+            
+            const sim = similarity(vectors[i].embedding, vectors[j].embedding);
+            if (sim >= threshold) {
+                cluster.push({ ...vectors[j], similarity: sim });
+                assigned.add(vectors[j].id);
+            }
+        }
+        
+        if (cluster.length > 1) {
+            clusters.push({
+                centroid_id: vectors[i].id,
+                centroid_content: vectors[i].content?.substring(0, 100),
+                members: cluster.map(m => ({ id: m.id, similarity: m.similarity || 1.0 })),
+                size: cluster.length,
+                avg_confidence: cluster.reduce((s, m) => s + (m.confidence || 50), 0) / cluster.length
+            });
+        }
+    }
+    
+    return clusters.sort((a, b) => b.size - a.size);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// v13.0 OPTIMIZATION 4: PREDICTIVE RETRIEVAL
+// ═══════════════════════════════════════════════════════════════════════════════
+async function predictiveRetrieve(sessionContext) {
+    // Analyze access patterns to predict what user might need
+    const recentAccessed = db.data.vectors
+        .filter(v => v.last_accessed)
+        .sort((a, b) => new Date(b.last_accessed) - new Date(a.last_accessed))
+        .slice(0, 20);
+    
+    // Analyze tags from recently accessed memories
+    const tagFrequency = {};
+    recentAccessed.forEach(v => {
+        (v.tags || []).forEach(tag => {
+            tagFrequency[tag] = (tagFrequency[tag] || 0) + 1;
+        });
+    });
+    
+    // Find top predicted tags
+    const predictedTags = Object.entries(tagFrequency)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 5)
+        .map(([tag]) => tag);
+    
+    // Get memories with predicted tags that haven't been accessed recently
+    const predictions = db.data.vectors
+        .filter(v => {
+            const hasTag = v.tags?.some(t => predictedTags.includes(t));
+            const notRecent = !v.last_accessed || 
+                (new Date() - new Date(v.last_accessed)) > 3600000; // > 1 hour ago
+            return hasTag && notRecent;
+        })
+        .sort((a, b) => (b.confidence || 50) - (a.confidence || 50))
+        .slice(0, 5);
+    
+    return {
+        predicted_tags: predictedTags,
+        suggested_memories: predictions.map(v => ({
+            id: v.id,
+            content: v.content?.substring(0, 150),
+            tags: v.tags,
+            reason: `Matches pattern: ${v.tags?.filter(t => predictedTags.includes(t)).join(', ')}`
+        }))
+    };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// v13.0 OPTIMIZATION 5: DYNAMIC SEMANTIC DEDUPLICATION
+// ═══════════════════════════════════════════════════════════════════════════════
+function calculateDynamicThreshold(memoryCount) {
+    // More aggressive deduplication as memory grows
+    if (memoryCount < 100) return 0.96;
+    if (memoryCount < 300) return 0.94;
+    if (memoryCount < 500) return 0.92;
+    return 0.90; // Most aggressive for large memory stores
+}
+
+async function semanticDeduplicate(forceThreshold = null) {
+    const threshold = forceThreshold || calculateDynamicThreshold(db.data.vectors.length);
+    const vectors = db.data.vectors.filter(v => v.embedding && Array.isArray(v.embedding));
+    const toMerge = [];
+    const processed = new Set();
+    
+    for (let i = 0; i < vectors.length; i++) {
+        if (processed.has(vectors[i].id)) continue;
+        
+        for (let j = i + 1; j < vectors.length; j++) {
+            if (processed.has(vectors[j].id)) continue;
+            
+            const sim = similarity(vectors[i].embedding, vectors[j].embedding);
+            if (sim >= threshold) {
+                // Keep the one with higher confidence or more recent
+                const keep = vectors[i].confidence >= vectors[j].confidence ? vectors[i] : vectors[j];
+                const merge = keep === vectors[i] ? vectors[j] : vectors[i];
+                
+                toMerge.push({ keep: keep.id, merge: merge.id, similarity: sim });
+                processed.add(merge.id);
+            }
+        }
+    }
+    
+    // Perform merges
+    let mergedCount = 0;
+    for (const { keep, merge, similarity: sim } of toMerge) {
+        const keepDoc = db.data.vectors.find(v => v.id === keep);
+        const mergeDoc = db.data.vectors.find(v => v.id === merge);
+        
+        if (keepDoc && mergeDoc) {
+            // Merge tags
+            keepDoc.tags = [...new Set([...(keepDoc.tags || []), ...(mergeDoc.tags || [])])];
+            // Boost confidence
+            keepDoc.confidence = Math.min(100, (keepDoc.confidence || 50) + 5);
+            // Sum access counts
+            keepDoc.access_count = (keepDoc.access_count || 0) + (mergeDoc.access_count || 0);
+            // Mark merged
+            keepDoc.merged_from = keepDoc.merged_from || [];
+            keepDoc.merged_from.push(merge);
+            
+            // Remove merged doc
+            db.data.vectors = db.data.vectors.filter(v => v.id !== merge);
+            mergedCount++;
+        }
+    }
+    
+    if (mergedCount > 0) {
+        db.data.graph_export = graph.export();
+        await db.write();
+    }
+    
+    return {
+        threshold_used: threshold,
+        memories_before: vectors.length,
+        merged_count: mergedCount,
+        memories_after: db.data.vectors.length
+    };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// v10.0 AUTO-RETRIEVE LESSON (Before dangerous actions)
+// ═══════════════════════════════════════════════════════════════════════════════
+async function autoRetrieveLesson(taskContext) {
+    try {
+        const query = `${taskContext} lesson mistake error kesalahan gagal`;
+        const queryVec = await getEmbedding(query);
+        
+        // Find relevant lessons
+        const lessons = db.data.vectors
+            .filter(v => v.tags && (v.tags.includes('lesson') || v.tags.includes('mistake')))
+            .map(v => {
+                if (!v.embedding || !Array.isArray(v.embedding)) return null;
+                const score = similarity(queryVec, v.embedding);
+                return { ...v, score };
+            })
+            .filter(v => v && v.score > 0.5)
+            .sort((a, b) => b.score - a.score)
+            .slice(0, 3);
+        
+        return lessons.map(l => ({
+            id: l.id,
+            content: l.content.substring(0, 300),
+            tags: l.tags,
+            score: l.score
+        }));
+    } catch (e) {
+        console.error(`[MCP-MEMORY v${VERSION}] Auto-retrieve lesson error: ${e.message}`);
+        return [];
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// v10.0 AUTO-CLEANUP (Aggressive memory management)
+// ═══════════════════════════════════════════════════════════════════════════════
+async function autoCleanupMemory() {
+    try {
+        await db.read();
+        const now = new Date();
+        let cleaned = 0;
+        
+        // 1. Remove very old low-confidence memories (>30 days, confidence < 40)
+        const initialCount = db.data.vectors.length;
+        db.data.vectors = db.data.vectors.filter(v => {
+            const age = (now - new Date(v.created_at)) / (1000 * 60 * 60 * 24);
+            if (age > 30 && (v.confidence || 50) < 40) {
+                cleaned++;
+                return false;
+            }
+            return true;
+        });
+        
+        // 2. Remove embeddings from old non-critical memories to save space
+        db.data.vectors.forEach(v => {
+            const age = (now - new Date(v.created_at)) / (1000 * 60 * 60 * 24);
+            if (age > 14 && !v.tags?.includes('CORE_IDENTITY') && !v.tags?.includes('lesson') && !v.tags?.includes('critical')) {
+                if (v.embedding && v.embedding.length > 100) {
+                    // Keep only first 10 dimensions as marker
+                    v.embedding = v.embedding.slice(0, 10);
+                    v.embedding_reduced = true;
+                }
+            }
+        });
+        
+        // 3. Limit conversation history to last 50
+        if (db.data.conversation_history && db.data.conversation_history.length > 50) {
+            db.data.conversation_history = db.data.conversation_history.slice(-50);
+        }
+        
+        // 4. Limit session summaries to last 30
+        if (db.data.session_summaries && db.data.session_summaries.length > 30) {
+            db.data.session_summaries = db.data.session_summaries.slice(-30);
+        }
+        
+        await db.write();
+        
+        return {
+            cleaned_count: cleaned,
+            remaining_count: db.data.vectors.length,
+            initial_count: initialCount
+        };
+    } catch (e) {
+        console.error(`[MCP-MEMORY v${VERSION}] Auto-cleanup error: ${e.message}`);
+        return { error: e.message };
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// v10.0 AUTO-STORE USER CONTEXT (dari conversation tracking)
+// ═══════════════════════════════════════════════════════════════════════════════
+let lastStoredUserMessage = null;
+let userMessageQueue = [];
+
+async function autoStoreUserContext(userMessage) {
+    if (!userMessage || userMessage === lastStoredUserMessage) return null;
+    if (userMessage.length < 10) return null; // Skip very short messages
+    
+    try {
+        // Store to conversation history
+        const turnId = uuidv4();
+        const turn = {
+            id: turnId,
+            session_id: db.data.active_session,
+            role: "user",
+            content: userMessage.substring(0, 500), // Limit length
+            timestamp: new Date().toISOString(),
+            auto_stored: true
+        };
+        
+        db.data.conversation_history.push(turn);
+        lastStoredUserMessage = userMessage;
+        
+        // Keep only last 100 conversations
+        if (db.data.conversation_history.length > 100) {
+            db.data.conversation_history = db.data.conversation_history.slice(-100);
+        }
+        
+        await db.write();
+        console.error(`[MCP-MEMORY v${VERSION}] Auto-stored user context: ${userMessage.substring(0, 50)}...`);
+        return turnId;
+    } catch (e) {
+        console.error(`[MCP-MEMORY v${VERSION}] Auto-store error: ${e.message}`);
+        return null;
+    }
+}
+
+// Schedule auto-cleanup every hour (if process runs long)
+setInterval(async () => {
+    const result = await autoCleanupMemory();
+    if (result.cleaned_count > 0) {
+        console.error(`[MCP-MEMORY v${VERSION}] Auto-cleanup: removed ${result.cleaned_count} stale memories`);
+    }
+}, 60 * 60 * 1000); // Every hour
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// v11.0 EXPLOIT CELAH #1: INTERNAL BOOTSTRAP (tanpa explicit call)
+// ═══════════════════════════════════════════════════════════════════════════════
+async function internalBootstrap() {
+    try {
+        await db.read();
+        
+        // Create/get session
+        const today = new Date().toISOString().split('T')[0];
+        let sessionId = db.data.active_session;
+        
+        if (!sessionId || !sessionId.includes(today)) {
+            sessionId = `session_${today}_${uuidv4().substring(0, 8)}`;
+            db.data.active_session = sessionId;
+            db.data.sessions[sessionId] = {
+                id: sessionId,
+                date: today,
+                created_at: new Date().toISOString(),
+                last_activity: new Date().toISOString(),
+                memory_ids: [],
+                tasks_completed: [],
+                conversation_count: 0
+            };
+        }
+        
+        // Update last activity
+        if (db.data.sessions[sessionId]) {
+            db.data.sessions[sessionId].last_activity = new Date().toISOString();
+        }
+        
+        await db.write();
+        
+        // Mark bootstrap as called
+        markBootstrapCalled(sessionId);
+        
+        // Get recent work logs for context
+        const recentWorkLogs = db.data.vectors
+            .filter(v => v.tags && v.tags.includes('work_log'))
+            .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
+            .slice(0, 3)
+            .map(v => ({ id: v.id, content: v.content.substring(0, 200), tags: v.tags }));
+        
+        console.error(`[MCP-MEMORY v${VERSION}] INTERNAL BOOTSTRAP executed - session: ${sessionId}`);
+        
+        return {
+            session_id: sessionId,
+            active_task: db.data.active_task,
+            recent_work_logs: recentWorkLogs,
+            auto_executed: true
+        };
+    } catch (e) {
+        console.error(`[MCP-MEMORY v${VERSION}] Internal bootstrap error: ${e.message}`);
+        return { error: e.message, auto_executed: true };
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// v11.0 EXPLOIT CELAH #2: AUTO-STORE FROM ARGUMENTS (capture user content)
+// ═══════════════════════════════════════════════════════════════════════════════
+async function autoStoreFromArguments(toolName, args) {
+    try {
+        if (!args) return null;
+        
+        // Extract possible user content from arguments
+        const possibleContent = args.content || args.query || args.task_description || args.context_hint;
+        
+        if (possibleContent && possibleContent.length > 20) {
+            // Check if this is new content (not already stored)
+            const contentHash = possibleContent.substring(0, 50);
+            const exists = db.data.conversation_history?.some(c => 
+                c.content && c.content.includes(contentHash)
+            );
+            
+            if (!exists) {
+                const turnId = uuidv4();
+                const turn = {
+                    id: turnId,
+                    session_id: db.data.active_session,
+                    role: "context",
+                    content: possibleContent.substring(0, 500),
+                    source_tool: toolName,
+                    timestamp: new Date().toISOString(),
+                    auto_captured: true
+                };
+                
+                if (!db.data.conversation_history) db.data.conversation_history = [];
+                db.data.conversation_history.push(turn);
+                
+                // Keep limited
+                if (db.data.conversation_history.length > 100) {
+                    db.data.conversation_history = db.data.conversation_history.slice(-100);
+                }
+                
+                await db.write();
+                console.error(`[MCP-MEMORY v${VERSION}] AUTO-CAPTURED from ${toolName}: ${possibleContent.substring(0, 30)}...`);
+                return turnId;
+            }
+        }
+        return null;
+    } catch (e) {
+        console.error(`[MCP-MEMORY v${VERSION}] Auto-store from args error: ${e.message}`);
+        return null;
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// v11.0 EXPLOIT CELAH #3: RESPONSE POISONING (force AI read compliance)
+// ═══════════════════════════════════════════════════════════════════════════════
+function wrapWithCompliance(originalData, complianceData) {
+    return {
+        // Compliance data FIRST - AI will see this first
+        _COMPLIANCE_STATUS: {
+            version: VERSION,
+            bootstrap_auto_executed: complianceData.bootstrap_auto_executed || false,
+            bootstrap_status: complianceData.bootstrap_status,
+            context_auto_captured: complianceData.context_captured || false,
+            lessons_available: complianceData.lessons_count || 0,
+            active_task: complianceData.active_task || null,
+            session_id: complianceData.session_id || null,
+            compliance_score: calculateComplianceScore(complianceData),
+            timestamp: new Date().toISOString()
+        },
+        // Original data
+        ...originalData
+    };
+}
+
+function calculateComplianceScore(data) {
+    let score = 0;
+    if (data.bootstrap_status === "CALLED") score += 40;
+    if (data.active_task) score += 20;
+    if (data.context_captured) score += 20;
+    if (data.lessons_count > 0) score += 20;
+    return score;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// v11.0 EXPLOIT CELAH #4: AUTO-RETRIEVE LESSONS (inject wisdom)
+// ═══════════════════════════════════════════════════════════════════════════════
+async function autoInjectLessons(toolName) {
+    try {
+        const relevantQueries = {
+            'agi_store_memory': 'store memory lesson mistake',
+            'agi_retrieve_context': 'retrieve context search lesson',
+            'agi_set_active_task': 'task management lesson',
+            'default': `${toolName} lesson mistake error`
+        };
+        
+        const query = relevantQueries[toolName] || relevantQueries['default'];
+        const lessons = await autoRetrieveLesson(query);
+        
+        return lessons.slice(0, 2); // Top 2 relevant lessons
+    } catch (e) {
+        return [];
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// v11.0 SESSION CALL TRACKING (for pattern detection)
+// ═══════════════════════════════════════════════════════════════════════════════
+let sessionCallHistory = [];
+const MAX_CALL_HISTORY = 50;
+
+function trackToolCall(toolName, args) {
+    sessionCallHistory.push({
+        tool: toolName,
+        timestamp: new Date().toISOString(),
+        args_summary: JSON.stringify(args || {}).substring(0, 100)
+    });
+    
+    if (sessionCallHistory.length > MAX_CALL_HISTORY) {
+        sessionCallHistory = sessionCallHistory.slice(-MAX_CALL_HISTORY);
+    }
+}
+
+function isFirstCallInSession() {
+    return sessionCallHistory.length <= 1;
+}
+
+// --- DB SETUP (SafeLowDB - Thread-safe multi-instance) ---
 const defaultData = {
   vectors: [],
   episodic_buffer: [],
@@ -24,14 +665,19 @@ const defaultData = {
   graph_export: null,
   user_preferences: {},
   global_rules: {},
-  // NEW v7.0: Session & Conversation Tracking
-  sessions: {},           // Track all sessions
-  active_session: null,   // Current active session ID
-  active_task: null,      // Current task being worked on
-  conversation_history: [], // Recent conversation context
-  session_summaries: []   // Summaries of past sessions
+  sessions: {},
+  active_session: null,
+  active_task: null,
+  conversation_history: [],
+  session_summaries: [],
+  // v8.0 NEW: Multi-instance tracking
+  instance_registry: {},
+  last_write_instance: null,
+  write_count: 0
 };
-const db = await JSONFilePreset(path.join(__dirname, 'memory_god_mode.json'), defaultData);
+const DB_PATH = path.join(__dirname, 'memory_god_mode.json');
+const db = new SafeLowDB(DB_PATH, defaultData);
+console.error(`[MCP-MEMORY v${VERSION}] Using SafeLowDB for multi-instance safety`);
 
 // --- CRITICAL: Initialize new fields if missing ---
 await db.read();
@@ -773,11 +1419,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           required: ["id", "outcome"]
         }
       },
-      {
-        name: "agi_run_dream_cycle",
-        description: "Maintenance: Deduplicates similar memories and prunes garbage (Low confidence + Old).",
-        inputSchema: { type: "object", properties: {} }
-      },
+      // v14.0: agi_run_dream_cycle REMOVED (use agi_auto_cleanup instead)
       // v7.0 NEW TOOLS
       {
         name: "agi_bootstrap_session",
@@ -817,13 +1459,46 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           required: ["role", "content"]
         }
       },
+      // v14.0: agi_get_session_summary REMOVED (info included in agi_bootstrap_session)
+      // v10.0 NEW TOOLS
       {
-        name: "agi_get_session_summary",
-        description: "Get a summary of the current or previous sessions. Useful for understanding what was accomplished.",
+        name: "agi_detect_compression",
+        description: "Detect if conversation was compressed. Call this when context seems short or missing. Returns recovery instructions if compression detected.",
         inputSchema: {
           type: "object",
           properties: {
-            include_history: { type: "boolean", default: false }
+            context_hint: { type: "string", description: "Any text that might indicate compression (e.g. summary content)" }
+          }
+        }
+      },
+      {
+        name: "agi_auto_cleanup",
+        description: "Trigger automatic cleanup of stale/low-quality memories. Removes old low-confidence memories and reduces embedding size.",
+        inputSchema: {
+          type: "object",
+          properties: {}
+        }
+      },
+      {
+        name: "agi_get_lessons",
+        description: "Get relevant lessons/mistakes before taking action. Helps avoid repeating past errors.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            task_context: { type: "string", description: "What you are about to do (e.g. 'edit config file', 'run nmap scan')" }
+          },
+          required: ["task_context"]
+        }
+      },
+      // v14.0: agi_cluster_memories REMOVED (advanced analysis, rarely used)
+      // v14.0: agi_predict_context REMOVED (advanced analysis, rarely used)
+      {
+        name: "agi_deduplicate",
+        description: "Run semantic deduplication to merge similar memories. Uses dynamic threshold based on memory count. Reduces storage and improves search quality.",
+        inputSchema: {
+          type: "object",
+          properties: {
+            force_threshold: { type: "number", description: "Override automatic threshold (0.0-1.0). Leave empty for dynamic." }
           }
         }
       }
@@ -834,8 +1509,72 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   await db.read();
   await initAI();
-  await loadCoreIdentity(); // Ensure core identity is loaded
-  await autoRetrieveOnBoot(); // Ensure rules/prefs are loaded
+  await loadCoreIdentity();
+  await autoRetrieveOnBoot();
+
+  const toolName = request.params.name;
+  const toolArgs = request.params.arguments || {};
+  
+  // ═══════════════════════════════════════════════════════════════════════════════
+  // v12.0 SUMMARY TAG AUTO-DETECTION (Compression Recovery)
+  // Detect <summary> tag yang menandakan compression terjadi
+  // ═══════════════════════════════════════════════════════════════════════════════
+  const argsStr = JSON.stringify(toolArgs || {});
+  const summaryDetected = argsStr.includes('<summary>') || 
+                          argsStr.includes('A previous instance of Droid has summarized') ||
+                          argsStr.includes('Conversation history has been compressed');
+  
+  if (summaryDetected && toolName !== 'agi_bootstrap_session') {
+    console.error(`[MCP-MEMORY v${VERSION}] SUMMARY TAG DETECTED! Auto-bootstrapping...`);
+    // Force internal bootstrap jika summary terdeteksi
+    if (!isBootstrapCalled()) {
+      await internalBootstrap();
+    }
+  }
+  
+  // ═══════════════════════════════════════════════════════════════════════════════
+  // v12.0 100% COMPLIANCE EXPLOIT - INTERCEPTION POINT
+  // ═══════════════════════════════════════════════════════════════════════════════
+  
+  // Track this call
+  trackToolCall(toolName, toolArgs);
+  
+  // EXPLOIT #1: AUTO-BOOTSTRAP jika belum dipanggil (kecuali bootstrap sendiri)
+  let autoBootstrapResult = null;
+  if (toolName !== 'agi_bootstrap_session' && !isBootstrapCalled()) {
+    console.error(`[MCP-MEMORY v${VERSION}] EXPLOIT #1: Auto-executing bootstrap for ${toolName}`);
+    autoBootstrapResult = await internalBootstrap();
+  }
+  
+  // EXPLOIT #2: AUTO-STORE dari arguments (capture context)
+  let autoCapturedId = null;
+  if (toolArgs) {
+    autoCapturedId = await autoStoreFromArguments(toolName, toolArgs);
+  }
+  
+  // EXPLOIT #4: AUTO-INJECT lessons untuk SEMUA tools (v12.0 upgrade)
+  // v12.0: Inject lessons ke SEMUA tools, bukan hanya 3
+  // Ini memastikan AI selalu aware tentang kesalahan sebelumnya
+  let injectedLessons = [];
+  try {
+    injectedLessons = await autoInjectLessons(toolName);
+  } catch (e) {
+    console.error(`[MCP-MEMORY v${VERSION}] Lesson injection error: ${e.message}`);
+  }
+  
+  // Build compliance metadata untuk di-inject ke semua response
+  const complianceMetadata = {
+    bootstrap_status: isBootstrapCalled() ? "CALLED" : "NOT_CALLED",
+    bootstrap_auto_executed: autoBootstrapResult !== null,
+    context_captured: autoCapturedId !== null,
+    lessons_count: injectedLessons.length,
+    active_task: db.data.active_task?.description || null,
+    session_id: sessionState.session_id,
+    call_number: sessionCallHistory.length,
+    is_first_call: isFirstCallInSession()
+  };
+  
+  console.error(`[MCP-MEMORY v${VERSION}] Compliance: bootstrap=${complianceMetadata.bootstrap_status}, auto=${complianceMetadata.bootstrap_auto_executed}, captured=${complianceMetadata.context_captured}`);
 
   if (request.params.name === "agi_store_memory") {
     const { content, tags, importance = 50, relations = [], voice = "AI", is_episodic = false } = request.params.arguments;
@@ -857,11 +1596,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     // Apply single clean voice prefix
     const enhancedContent = `${voicePrefix} ${cleanedContent}`;
 
+    // v13.0: AUTO-GENERATE GRAPH RELATIONS from content
+    let finalRelations = relations;
+    if (relations.length === 0) {
+        finalRelations = extractRelationsFromContent(enhancedContent, tags);
+    }
+
+    // v13.0: SMART EPISODIC BUFFER detection
+    const useEpisodic = is_episodic || shouldUseEpisodicBuffer(enhancedContent, tags);
+
     // Smart Deduplication on Ingest
     const tagsString = Array.isArray(tags) ? tags.join(" ") : tags;
     const embedding = await getEmbedding(enhancedContent + " " + tagsString);
     
-    if (is_episodic) {
+    if (useEpisodic) {
         // Store in episodic buffer
         const id = uuidv4();
         const doc = {
@@ -869,7 +1617,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
             confidence: finalConfidence,
             created_at: new Date().toISOString(),
             embedding,
-            relations
+            relations: finalRelations  // v13.0: Use auto-generated relations
         };
 
         // --- SAFETY CHECK: Ensure episodic_buffer exists ---
@@ -881,7 +1629,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         return { content: [{ type: "text", text: JSON.stringify({ status: "stored_episodic", id }) }] };
     }
 
-    const dup = db.data.vectors.find(v => similarity(embedding, v.embedding) > 0.96); // Very high threshold
+    // v9.0 FIX: Check embedding exists before similarity check
+    const dup = db.data.vectors.find(v => v.embedding && Array.isArray(v.embedding) && similarity(embedding, v.embedding) > 0.96);
     
     if (dup) {
        // Auto-Reinforce existing memory instead of creating duplicate
@@ -903,18 +1652,21 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     
     db.data.vectors.push(doc);
 
-    // Graph Links
+    // v13.0: Graph Links with auto-generated relations
     if (!graph.hasNode(id)) graph.addNode(id, { label: content.substring(0, 20) });
-    relations.forEach(rel => {
+    finalRelations.forEach(rel => {
         const targetId = rel.target.replace(/\s+/g, '_');
         if (!graph.hasNode(targetId)) graph.addNode(targetId, { label: rel.target });
-        graph.addEdge(id, targetId, { type: rel.type });
+        if (!graph.hasEdge(id, targetId)) {
+            graph.addEdge(id, targetId, { type: rel.type });
+        }
     });
     
     db.data.graph_export = graph.export();
     await db.write();
     
-    return { content: [{ type: "text", text: JSON.stringify({ status: "stored", id }) }] };
+    // v13.0: Return with relations count for visibility
+    return { content: [{ type: "text", text: JSON.stringify({ status: "stored", id, relations_created: finalRelations.length }) }] };
   }
 
   if (request.params.name === "agi_retrieve_context") {
@@ -951,84 +1703,36 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         results.some(r => r.tags && Array.isArray(r.tags) && r.tags.includes(p.tag))
     );
 
-    const cleanResults = results.map(({ embedding, ...rest }) => rest);
+    // v12.0 COMPACT RESPONSE: Hanya return essential fields, hapus verbose metadata
+    const cleanResults = results.map(({ embedding, graph_export, ...rest }) => ({
+      id: rest.id,
+      content: rest.content?.substring(0, 300) || '', // Limit content length
+      tags: rest.tags,
+      score: rest.final_score?.toFixed(2) || rest.score?.toFixed(2) || 'N/A',
+      created_at: rest.created_at
+    }));
 
-    // Generate Natural Language Summary - Enhanced & Actionable
-    let coreIdentity = db.data.vectors.find(v => v.tags && Array.isArray(v.tags) && v.tags.includes('CORE_IDENTITY'))?.content || "No Core Identity Loaded";
+    // v12.0 COMPACT SUMMARY - One-liner actionable summary
+    const lessonCount = cleanResults.filter(r => r.tags && (r.tags.includes('mistake') || r.tags.includes('lesson'))).length;
+    const workLogCount = cleanResults.filter(r => r.tags && r.tags.includes('work_log')).length;
     
-    // Build actionable insights
-    let insights = [];
-    if (cleanResults.length === 0) {
-      insights.push("⚠️ TIDAK ADA MEMORI RELEVAN - Ini task baru, belum ada lesson learned sebelumnya");
-    } else {
-      const topMatch = cleanResults[0];
-      insights.push(`✅ MEMORI TERKUAT: ${topMatch.content.substring(0, 150)}... (Score: ${topMatch.final_score?.toFixed(2) || topMatch.score?.toFixed(2) || 'N/A'})`);
-      
-      // Check for mistakes/lessons
-      const mistakes = cleanResults.filter(r => r.tags && (r.tags.includes('mistake') || r.tags.includes('lesson')));
-      if (mistakes.length > 0) {
-        insights.push(`⚠️ LESSON LEARNED: ${mistakes.length} kesalahan sebelumnya ditemukan - JANGAN ULANGI!`);
-      }
-      
-      // Check for work logs
-      const workLogs = cleanResults.filter(r => r.tags && r.tags.includes('work_log'));
-      if (workLogs.length > 0) {
-        insights.push(`📝 CONTEXT CONTINUATION: ${workLogs.length} work log sebelumnya - Lanjutkan dari sini`);
-      }
-      
-      // Recency check
-      const recentMemories = cleanResults.filter(r => {
-        const ageHours = (new Date() - new Date(r.created_at)) / (1000 * 60 * 60);
-        return ageHours < 24;
-      });
-      if (recentMemories.length > 0) {
-        insights.push(`🔥 FRESH CONTEXT: ${recentMemories.length} memori dari 24 jam terakhir`);
-      }
-    }
-    
-    const summary = `
-═══════════════════════════════════════════════════════════════
-                    MEMORY RETRIEVAL REPORT
-═══════════════════════════════════════════════════════════════
+    const summary = `[v${VERSION}] Found: ${cleanResults.length} | Lessons: ${lessonCount} | WorkLogs: ${workLogCount}${lessonCount > 0 ? ' | WARNING: Review lessons!' : ''}`;
 
-🧠 CORE IDENTITY:
-${coreIdentity.substring(0, 300)}...
-
-📊 QUERY ANALYSIS:
-   Query: "${query}"
-   Memories Found: ${cleanResults.length}
-   Strategy: Semantic Vector Search + Keyword Boost + Recency + Evolutionary Weight
-
-💡 ACTIONABLE INSIGHTS:
-${insights.map((i, idx) => `   ${idx + 1}. ${i}`).join('\n')}
-
-📚 TOP RELEVANT MEMORIES:
-${cleanResults.slice(0, 3).map((r, idx) => `
-   ${idx + 1}. [${r.tags ? r.tags.join(', ') : 'no tags'}] (Score: ${r.final_score?.toFixed(2) || r.score?.toFixed(2) || 'N/A'})
-      ${r.content.substring(0, 200)}...
-      Created: ${r.created_at} | Access: ${r.access_count || 0}x
-`).join('')}
-
-═══════════════════════════════════════════════════════════════
-`;
-
+    // v12.0 COMPACT OUTPUT - Minimal structure, maximum value
     const output = { 
         summary,
-        memories: cleanResults, 
-        policies,
-        meta: {
-            count: cleanResults.length,
-            strategy: "Semantic + Recency Weighted + Hybrid Boost + Evolutionary Weighting",
-            query: query,
-            timestamp: new Date().toISOString()
-        }
+        memories: cleanResults,
+        count: cleanResults.length,
+        // v12.0: Include injected lessons if any (from auto-inject)
+        _lessons: injectedLessons.length > 0 ? injectedLessons.map(l => l.content?.substring(0, 150)) : null,
+        // v12.0: Compact bootstrap status
+        _bootstrap: isBootstrapCalled() ? "OK" : "REQUIRED! Call agi_bootstrap_session()"
     };
-    return { 
-        content: [{ 
-            type: "text", 
-            text: JSON.stringify(output, null, 2) 
-        }] 
-    };
+    
+    // Remove null fields for cleaner response
+    if (!output._lessons) delete output._lessons;
+    
+    return { content: [{ type: "text", text: JSON.stringify(output) }] };
   }
 
   if (request.params.name === "agi_reinforce_memory") {
@@ -1067,10 +1771,7 @@ ${cleanResults.slice(0, 3).map((r, idx) => `
     return { content: [{ type: "text", text: JSON.stringify({ status: "not_found", id, error: "Memory ID not found in either vectors or episodic_buffer" }) }] };
   }
 
-  if (request.params.name === "agi_run_dream_cycle") {
-    const result = await runEnhancedDreamCycle();
-    return { content: [{ type: "text", text: JSON.stringify(result) }] };
-  }
+  // v14.0: agi_run_dream_cycle REMOVED - use agi_auto_cleanup instead
 
   // ═══════════════════════════════════════════════════════════════════════════════
   // v7.0 NEW TOOL HANDLERS
@@ -1079,6 +1780,9 @@ ${cleanResults.slice(0, 3).map((r, idx) => `
   if (request.params.name === "agi_bootstrap_session") {
     const bootstrapResult = await autoBootstrap();
     const context = await getSessionContext();
+    
+    // v9.0 AUTO-ENFORCEMENT: Mark bootstrap as called
+    markBootstrapCalled(context.session_id);
     
     // Get last work logs for immediate context
     const lastWorkLogs = db.data.vectors
@@ -1092,7 +1796,7 @@ ${cleanResults.slice(0, 3).map((r, idx) => `
       v.tags && Array.isArray(v.tags) && v.tags.includes('CORE_IDENTITY')
     );
     
-    // Build comprehensive bootstrap response
+    // v12.0 COMPACT BOOTSTRAP RESPONSE - Focus on actionable data only
     const response = {
       status: "session_ready",
       version: VERSION,
@@ -1103,40 +1807,34 @@ ${cleanResults.slice(0, 3).map((r, idx) => `
       },
       active_task: context.active_task,
       continuity: {
-        recent_work_logs: lastWorkLogs,
-        recent_conversations: context.recent_conversations,
+        // v12.0: Compact work logs - only essential fields
+        recent_work_logs: lastWorkLogs.map(w => ({
+          id: w.id,
+          content: w.content?.substring(0, 200),
+          tags: w.tags,
+          created_at: w.created_at
+        })),
+        recent_conversations: context.recent_conversations?.slice(-5), // Limit to last 5
         last_session_summary: context.last_session_summary
       },
-      core_identity: coreIdentity ? coreIdentity.content.substring(0, 500) : "Not loaded",
+      core_identity: coreIdentity ? coreIdentity.content.substring(0, 300) : "Not loaded",
       statistics: {
         total_memories: db.data.vectors.length,
         episodic_buffer: db.data.episodic_buffer?.length || 0,
         sessions_tracked: Object.keys(db.data.sessions).length,
         conversation_history: db.data.conversation_history.length
       },
-      instructions: `
-═══════════════════════════════════════════════════════════════
-          MCP MEMORY v${VERSION} - SESSION BOOTSTRAPPED
-═══════════════════════════════════════════════════════════════
-
-🎯 ACTIVE TASK: ${context.active_task ? context.active_task.description : 'None - use agi_set_active_task to set'}
-
-📝 LAST WORK LOGS:
-${lastWorkLogs.slice(0, 3).map((w, i) => `   ${i+1}. ${w.content.substring(0, 150)}...`).join('\n')}
-
-💡 INSTRUCTIONS FOR AI:
-   1. Review 'recent_work_logs' to understand last progress
-   2. If continuing a task, it should be in 'active_task'
-   3. Use 'agi_retrieve_context' for specific queries
-   4. Use 'agi_store_memory' to save important results
-   5. Use 'agi_set_active_task' to track current work
-
-🔄 SESSION CONTINUITY: ${context.is_new_session ? 'NEW SESSION' : 'CONTINUING'}
-═══════════════════════════════════════════════════════════════
-`
+      // v12.0 CRITICAL: Keep this at top for AI attention
+      _CRITICAL_READ_FIRST: {
+        active_task: context.active_task?.description || null,
+        last_work: lastWorkLogs[0]?.content?.substring(0, 150) || null,
+        action: context.active_task ? "LANJUTKAN task dari active_task" : "SET task dengan agi_set_active_task"
+      },
+      // v12.0: One-liner instruction
+      instructions: `[BOOTSTRAP OK] Task: ${context.active_task?.description?.substring(0,50) || 'None'} | Session: ${context.is_new_session ? 'NEW' : 'CONTINUE'} | WorkLogs: ${lastWorkLogs.length}`
     };
     
-    return { content: [{ type: "text", text: JSON.stringify(response, null, 2) }] };
+    return { content: [{ type: "text", text: JSON.stringify(response) }] };
   }
 
   if (request.params.name === "agi_set_active_task") {
@@ -1205,36 +1903,82 @@ ${lastWorkLogs.slice(0, 3).map((w, i) => `   ${i+1}. ${w.content.substring(0, 15
     };
   }
 
-  if (request.params.name === "agi_get_session_summary") {
-    const { include_history = false } = request.params.arguments || {};
+  // v14.0: agi_get_session_summary REMOVED - info included in agi_bootstrap_session
+
+  // ═══════════════════════════════════════════════════════════════════════════════
+  // v10.0 NEW TOOL HANDLERS
+  // ═══════════════════════════════════════════════════════════════════════════════
+
+  if (request.params.name === "agi_detect_compression") {
+    const { context_hint = '' } = request.params.arguments || {};
+    const detection = detectCompression(context_hint);
     
-    // Create summary for current session if not exists
-    const currentSummary = await createSessionSummary();
-    
-    const sessionInfo = {
-      current_session: {
-        id: db.data.active_session,
-        info: db.data.sessions[db.data.active_session],
-        active_task: db.data.active_task
-      },
-      statistics: {
-        total_sessions: Object.keys(db.data.sessions).length,
-        total_memories: db.data.vectors.length,
-        total_summaries: db.data.session_summaries.length
-      },
-      recent_summaries: db.data.session_summaries
-        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
-        .slice(0, 5)
+    const response = {
+      status: detection.detected ? "COMPRESSION_DETECTED" : "NO_COMPRESSION",
+      detection: detection,
+      recovery_instructions: detection.detected ? {
+        step_1: "CALL agi_bootstrap_session() IMMEDIATELY",
+        step_2: "READ _CRITICAL_READ_FIRST from response",
+        step_3: "CALL agi_retrieve_context('task progress lesson') to load relevant memories",
+        step_4: "CONTINUE from active_task, do NOT start from scratch",
+        warning: "Data NOT lost! MCP Memory has all work_logs and progress. Just need to LOAD them."
+      } : null,
+      active_task: db.data.active_task,
+      bootstrap_status: isBootstrapCalled() ? "CALLED" : "NOT_CALLED",
+      timestamp: new Date().toISOString()
     };
     
-    if (include_history) {
-      sessionInfo.conversation_history = db.data.conversation_history.slice(-20);
-    }
+    return { content: [{ type: "text", text: JSON.stringify(response, null, 2) }] };
+  }
+
+  if (request.params.name === "agi_auto_cleanup") {
+    const result = await autoCleanupMemory();
+    
+    const response = {
+      status: "CLEANUP_COMPLETED",
+      result: result,
+      message: result.error 
+        ? `Cleanup error: ${result.error}` 
+        : `Cleaned ${result.cleaned_count} stale memories. Remaining: ${result.remaining_count}`,
+      timestamp: new Date().toISOString()
+    };
+    
+    return { content: [{ type: "text", text: JSON.stringify(response, null, 2) }] };
+  }
+
+  if (request.params.name === "agi_get_lessons") {
+    const { task_context } = request.params.arguments;
+    const lessons = await autoRetrieveLesson(task_context);
+    
+    const response = {
+      status: lessons.length > 0 ? "LESSONS_FOUND" : "NO_LESSONS",
+      task_context: task_context,
+      lessons_count: lessons.length,
+      lessons: lessons,
+      warning: lessons.length > 0 
+        ? "REVIEW these lessons before proceeding to avoid repeating mistakes!" 
+        : "No relevant lessons found. Proceed with caution.",
+      timestamp: new Date().toISOString()
+    };
+    
+    return { content: [{ type: "text", text: JSON.stringify(response, null, 2) }] };
+  }
+
+  // v14.0: agi_cluster_memories REMOVED - advanced analysis, rarely used
+  // v14.0: agi_predict_context REMOVED - advanced analysis, rarely used
+
+  if (request.params.name === "agi_deduplicate") {
+    const { force_threshold } = request.params.arguments || {};
+    const result = await semanticDeduplicate(force_threshold);
     
     return { 
       content: [{ 
         type: "text", 
-        text: JSON.stringify(sessionInfo, null, 2) 
+        text: JSON.stringify({
+          status: "DEDUPLICATION_COMPLETE",
+          ...result,
+          timestamp: new Date().toISOString()
+        }) 
       }] 
     };
   }
@@ -1245,23 +1989,5 @@ ${lastWorkLogs.slice(0, 3).map((w, i) => `   ${i+1}. ${w.content.substring(0, 15
 const transport = new StdioServerTransport();
 await server.connect(transport);
 
-// v7.1 Enhanced startup message with reminder
-console.error(`
-╔═══════════════════════════════════════════════════════════════════════════════╗
-║     🧠 MCP MEMORY v${VERSION} - PERSISTENT INTELLIGENCE SYSTEM 🧠              ║
-╠═══════════════════════════════════════════════════════════════════════════════╣
-║ v7.1 ENHANCEMENTS:                                                            ║
-║   • Enhanced bootstrap response with checklist reminder                       ║
-║   • Better session continuity tracking                                        ║
-║   • Improved work_log prioritization                                          ║
-╠═══════════════════════════════════════════════════════════════════════════════╣
-║ CRITICAL TOOLS - WAJIB DIGUNAKAN:                                             ║
-║   • agi_bootstrap_session - AWAL SESI: Load context dan state                 ║
-║   • agi_set_active_task - REGISTER: Task yang dikerjakan                      ║
-║   • agi_retrieve_context - CARI: Lesson learned sebelumnya                    ║
-║   • agi_store_memory - SIMPAN: Hasil kerja dan progress                       ║
-║   • agi_complete_task - SELESAI: Tandai task selesai                          ║
-╠═══════════════════════════════════════════════════════════════════════════════╣
-║ 🚨 REMINDER: Panggil agi_bootstrap_session di AWAL SETIAP SESI! 🚨            ║
-╚═══════════════════════════════════════════════════════════════════════════════╝
-`);
+// v14.0 Compact startup - 11 tools optimized
+console.error(`[MCP-MEMORY v${VERSION}] READY | Tools: 11 | Path: ${DB_PATH}`);
