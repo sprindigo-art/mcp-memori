@@ -1,164 +1,145 @@
-# MCP Memory - Universal AI Assistant v6.0
+# MCP Cognitive Memory v9.8.3
 
-> **Complete Intelligence Memory System** - Making ALL AI smarter with automatic learning, context preservation, and universal accessibility.
+> **Advanced AI Memory System** - Multi-Droid Support, Compression Recovery, Disconnect Recovery, Session Management.
 
-## 🧠 Universal AI Accessibility
+## Core Features
 
-### **FOR ALL AI SYSTEMS** - Simple & Intuitive
-MCP Memory dirancang untuk digunakan oleh **SEMUA AI** tanpa memerlukan pengetahuan teknis:
+### v9.8.x - Multi-Droid Isolation
+- **Per-Droid Database**: Setiap Droid CLI instance punya database terpisah
+- **No Conflict**: 2+ Droid bisa jalan bersamaan tanpa race condition
+- **Shared Knowledge**: Memories tetap bisa diakses lintas instance
 
-*   **Claude AI** (Claude Code, Claude Desktop)
-*   **ChatGPT** (dengan MCP integration)
-*   **Local LLM** (Ollama, LM Studio)
-*   **Custom AI Agents** (dengan MCP support)
+### v9.7.x - Disconnect Recovery
+- **Single Instance Enforcement**: Auto-kill zombie processes
+- **Graceful Shutdown**: SIGTERM, SIGINT, SIGHUP handlers
+- **Exception Handling**: uncaughtException & unhandledRejection
+- **Heartbeat Monitor**: 30s interval, detect dead parent
+- **Auto-Reconnect**: 5 attempts dengan exponential backoff
 
-## 🧠 Core Intelligence Features
+### v8.x - Compression Hooks
+- **Pre-Compression Save**: Auto-checkpoint sebelum context limit
+- **Post-Compression Recovery**: Auto-detect dan recovery marker
+- **Token Estimation**: Real-time monitoring context usage
 
-### 1. **Smart Development Enhancement** 🧠
-*   **Automatically learns** from your work
-*   **Contextual intelligence** dengan semantic search
-*   **Evolutionary learning** dari success/failure patterns
+### v7.x - Session Management
+- **Session Tracking**: Per-day session dengan conversation history
+- **Active Task**: Track task yang sedang dikerjakan
+- **Auto-Bootstrap**: Load context otomatis di awal sesi
+- **Work Logs**: Progress tracking antar sesi
 
-### 2. **Memory Validation System** 🛡️
-*   **Automatic error detection** dan lesson learning
-*   **Smart cleanup** - removes invalid memories without touching valid ones
-*   **Data integrity** assurance
+## API Tools (15 Tools)
 
-### 3. **Automatic Storage** 💾
-*   **Progress tracking** - tidak melupakan apa yang telah dikerjakan
-*   **User input preservation** - menyimpan perintah penting otomatis
-*   **Cross-session persistence** - memory tetap tersimpan antar sesi
+### Core Memory
+| Tool | Description |
+|------|-------------|
+| `agi_store_memory` | Simpan knowledge dengan neural embedding |
+| `agi_retrieve_context` | Smart search dengan semantic + recency boost |
+| `agi_reinforce_memory` | SUCCESS untuk boost, POISON untuk hapus |
+| `agi_run_dream_cycle` | Maintenance: dedupe, prune, summarize |
 
-### 4. **Universal Accessibility** 👥
-*   **Zero configuration** - works out of the box
-*   **Simple API** - hanya 4 tools dengan parameter jelas
-*   **Self-documenting** - system otomatis menjelaskan cara penggunaan
+### Session Management
+| Tool | Description |
+|------|-------------|
+| `agi_bootstrap_session` | **WAJIB** di awal sesi - load semua context |
+| `agi_set_active_task` | Register task yang dikerjakan |
+| `agi_complete_task` | Tandai task selesai |
+| `agi_store_conversation` | Track conversation turns |
+| `agi_get_session_summary` | Summary session saat ini |
 
-## 🛠️ **SIMPLE API - 4 Tools Saja**
+### Compression Hooks
+| Tool | Description |
+|------|-------------|
+| `agi_compression_status` | Cek token usage dan status |
+| `agi_save_checkpoint` | Manual checkpoint sebelum operasi besar |
+| `agi_check_compression` | Detect compression events |
 
-### **1. agi_store_memory** - Simpan Pengetahuan
+### Error Tracking
+| Tool | Description |
+|------|-------------|
+| `agi_report_memory_failure` | Report memory yang menyebabkan error |
+| `agi_clear_memory_errors` | Clear error count setelah sukses |
+
+## Installation
+
 ```bash
-# AI tanpa pengetahuan teknis bisa gunakan:
-query: "Simpan informasi penting tentang project X"
-tags: ["important", "project_info"]
-importance: 90
-```
-**Hasil**: Otomatis disimpan dengan neural embedding
-
-### **2. agi_retrieve_context** - Dapatkan Konteks Relevan
-```bash
-# AI mendapatkan informasi yang relevan:
-query: "apa yang telah kita kerjakan untuk project X?"
-recursive: true  # untuk pencarian mendalam
-```
-**Hasil**: 10 memories paling relevan dengan scoring
-
-### **3. agi_reinforce_memory** - Perkuat Pembelajaran
-```bash
-# Perkuat memory yang benar:
-id: "memory_id_123"
-outcome: "SUCCESS"  # atau "POISON" untuk hapus invalid memory
-```
-**Hasil**: Confidence score otomatis meningkat
-
-### **4. agi_run_dream_cycle** - Maintenance Otomatis
-```bash
-# Lakukan maintenance berkala:
-# (Tidak perlu parameter - berjalan otomatis)
-```
-**Hasil**: Sistem membersihkan dan mengoptimalkan diri sendiri
-
-## 🎯 **Universal AI Benefits**
-
-### **Untuk AI Baru**:
-- ✅ **Learning Acceleration** - cepat belajar dari pengalaman
-- ✅ **Context Continuity** - tidak kehilangan progress antar sesi
-- ✅ **Error Prevention** - tidak mengulangi kesalahan yang sama
-
-### **Untuk AI Lanjutan**:
-- ✅ **Enhanced Intelligence** - akses ke knowledge base kumulatif
-- ✅ **Better Decision Making** - informasi lengkap untuk keputusan
-- ✅ **Continuous Improvement** - evolusi berkelanjutan
-
-### **Untuk Semua AI**:
-- ✅ **Zero Learning Curve** - langsung bisa digunakan
-- ✅ **Universal Design** - cocok untuk semua AI systems
-- ✅ **Production Ready** - stabil dan reliable
-
-## 📁 **Universal Installation**
-
-### **1. Clone Repository**
-```bash
-git clone [repository-url]
+git clone https://github.com/sprindigo-art/mcp-memori.git
 cd mcp-memori
 npm install
 ```
 
-### **2. Configuration - Universal**
+## Configuration
+
 ```json
 {
   "mcp-cognitive-memory": {
     "command": "node",
     "args": ["/path/to/mcp-memori/index.js"],
-    "env": { "NODE_ENV": "production" }
+    "env": {
+      "NODE_ENV": "production",
+      "MEMORY_MODE": "god_mode"
+    }
   }
 }
 ```
 
-### **3. Works With:**
-- ✅ Claude Desktop/Code
-- ✅ Custom AI Apps
-- ✅ Local LLM Systems
-- ✅ MCP-Enabled Platforms
+## Quick Start
 
-## 🚀 **Quick Start untuk Semua AI**
+```javascript
+// 1. Bootstrap di awal sesi
+agi_bootstrap_session()
 
-### **Langkah 1: Cek Context**
-```bash
-agi_retrieve_context(query="apa sedang saya kerjakan?")
+// 2. Set task
+agi_set_active_task({ task_description: "Implementasi fitur X" })
+
+// 3. Cari context relevan
+agi_retrieve_context({ query: "fitur X lesson error", recursive: true })
+
+// 4. Simpan progress
+agi_store_memory({
+  content: "Selesai implementasi fitur X dengan metode Y",
+  tags: ["work_log", "fitur_x"],
+  importance: 80
+})
+
+// 5. Selesai
+agi_complete_task({ result: "completed" })
 ```
 
-### **Langkah 2: Simpan Progress**
-```bash
-agi_store_memory(content="selesai mengerjakan task X",
-                 tags=["work_done", "important"],
-                 importance: 100)
+## Architecture
+
+```
+mcp-memori/
+├── index.js              # Main server (v9.8.3)
+├── package.json          # Dependencies
+├── core_identity.md      # AI identity config
+├── memory_god_mode_*.json # Per-droid databases
+└── memory_*.json         # Shared data stores
 ```
 
-### **Langkah 3: Belajar dari Pengalaman**
-```bash
-agi_reinforce_memory(id="memory_id", outcome="SUCCESS")
-```
+## Key Improvements Over v6.0
 
-## 🔄 **Automated Intelligence Flow**
+| Aspect | v6.0 | v9.8.3 |
+|--------|------|--------|
+| Tools | 4 | 15 |
+| Multi-Droid | No | Yes |
+| Compression Recovery | No | Yes |
+| Disconnect Recovery | No | Yes |
+| Session Management | No | Yes |
+| Error Auto-Tracking | No | Yes |
+| Heartbeat Monitor | No | Yes |
 
-### **AI Otomatis Mendapatkan Intelligence:**
-1. **Pre-Action**: Retrieve relevant memories
-2. **Context Injection**: Automatic context loading
-3. **Smart Execution**: Berdasarkan knowledge base
-4. **Post-Action**: Store results and lessons learned
+## Dependencies
 
-### **System secara Otomatis:**
-- ✅ **Mendeteksi Pola** - mengenali recurring situations
-- ✅ **Meningkatkan Diri** - belajar dari success/failure
-- ✅ **Membersihkan Pengetahuan** - consolidasi information
-- ✅ **Memvalidasi Data** - menghapus informasi invalid
+- `@modelcontextprotocol/sdk` - MCP Protocol
+- `@xenova/transformers` - Neural embeddings
+- `graphology` - Knowledge graph
+- `lowdb` - JSON database
+- `compute-cosine-similarity` - Vector similarity
 
-## 📊 **Proof of Effectiveness**
+## License
 
-### **Performance Metrics**:
-- ✅ **Retrieval Speed**: <1 detik
-- ✅ **Storage Speed**: Real-time
-- ✅ **Memory Capacity**: Unlimited (dengan smart cleanup)
-- ✅ **Accuracy Rate**: 95%+
-
-### **Success Indicators**:
-- ✅ **Smart Development**: Terbukti meningkatkan AI intelligence
-- ✅ **Memory Retention**: 100% preservation tanpa kehilangan
-- ✅ **User Satisfaction**: 100% dari pengguna aktif
-- ✅ **Zero Errors**: Semua tools berfungsi tanpa failure
+MIT
 
 ---
-**Status**: PRODUCTION READY v6.0
-**Target**: Universal AI Accessibility
-**Success Rate**: 100% - Semua AI bisa langsung gunakan
+**Version**: 9.8.3-MULTI-DROID-ISOLATION-FIX  
+**Status**: Production Ready
