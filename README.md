@@ -1,24 +1,38 @@
-# MCP Cognitive Memory v14.0.0-OPTIMIZED
+# MCP Cognitive Memory v14.2.0-MULTIPLATFORM
 
-> **Advanced AI Memory System** - Multi-Instance Support, Compression Recovery, Semantic Search, Knowledge Graph.
+> **Advanced AI Memory System** - Multi-Platform, Multi-AI Support, Shared Database, Per-AI Session State.
 
-## What's New in v14.0.0
+## What's New in v14.2.0
 
-- **11 Optimized Tools** (reduced from 15) - Removed rarely used tools
-- **SafeStorage** - Multi-instance file locking (30s timeout)
-- **100% Embedding Coverage** - All memories have semantic embeddings
-- **Auto-Inject Lessons** - Lessons injected to ALL tool responses
-- **Compact Responses** - Max 300 char per field
-- **Graph Relations** - Auto-generate relations from content
-- **Episodic Buffer** - Smart temporary memory detection
+- **Multi-Platform Support** - Linux, Windows, macOS
+- **Multi-AI Detection** - Droid/Factory, Gemini/Antigravity, Claude, Trae
+- **Per-AI Session State** - Each AI has separate session_state file (no conflicts)
+- **Shared Database** - All AI learn from same lessons/memories
+- **NEW Tool: `get_memory_info`** - Report platform, AI, database stats
+- **12 Total Tools** (was 11)
 
 ## Features
 
+### Multi-Platform Support
+- **Linux**: `/home/user/.../mcp-memori/`
+- **Windows**: `D:\path\to\mcp-memori\`
+- **macOS**: `/Users/user/.../mcp-memori/`
+- **Auto-detection** via `os.platform()`
+
+### Multi-AI Support
+| AI Platform | Detection Method | Session File |
+|-------------|-----------------|--------------|
+| Droid/Factory | `FACTORY_API_KEY`, parent process | `session_state_droid.json` |
+| Gemini/Antigravity | `GOOGLE_AI_KEY`, parent process | `session_state_gemini.json` |
+| Claude | `ANTHROPIC_API_KEY` | `session_state_claude.json` |
+| Trae | `TRAE_SESSION` | `session_state_trae.json` |
+| Unknown | Fallback | `session_state.json` |
+
 ### Multi-Instance Support
 - **File Locking**: 30s lock timeout, 7 retries
-- **Safe for 2-3 AI simultaneously** (Droid CLI + Antigravity)
+- **Safe for 2-3 AI simultaneously** (Droid + Antigravity + Claude)
 - **Zero data corruption** with concurrent access
-- **Cross-model knowledge sharing** (Claude + Gemini)
+- **Shared lessons** across all AI platforms
 
 ### Compression Recovery
 - **Auto-detect compression** via summary tags
@@ -30,7 +44,7 @@
 - **Cosine similarity** with recency boost
 - **Knowledge graph** with graphology
 
-## API Tools (11 Tools)
+## API Tools (12 Tools)
 
 | Tool | Description | Use Case |
 |------|-------------|----------|
@@ -45,6 +59,7 @@
 | `agi_store_conversation` | Store conversation | Context |
 | `agi_reinforce_memory` | Boost/POISON memory | Quality control |
 | `agi_deduplicate` | Remove duplicates | Maintenance |
+| `get_memory_info` | **NEW** Platform, AI, DB stats | Debugging |
 
 ## Installation
 
@@ -81,24 +96,42 @@ npm install
 // 1. Bootstrap at session start (MANDATORY)
 agi_bootstrap_session()
 
-// 2. Set active task
+// 2. Check platform and AI info
+get_memory_info()
+
+// 3. Set active task
 agi_set_active_task({ task_description: "Implement feature X" })
 
-// 3. Get lessons before risky action
+// 4. Get lessons before risky action
 agi_get_lessons({ task_context: "feature X implementation" })
 
-// 4. Retrieve relevant context
+// 5. Retrieve relevant context
 agi_retrieve_context({ query: "feature X lesson error" })
 
-// 5. Store progress
+// 6. Store progress
 agi_store_memory({
   content: "Completed feature X using method Y",
   tags: ["work_log", "feature_x"],
   importance: 80
 })
 
-// 6. Complete task
+// 7. Complete task
 agi_complete_task({ result: "completed" })
+```
+
+## Multi-AI Architecture
+
+```
+mcp-memori/
+├── index.js                    # Main server (v14.2.0)
+├── safe-storage.js             # Multi-instance file locking
+├── package.json                # Dependencies
+├── memory_god_mode.json        # SHARED database (all AI)
+├── session_state_droid.json    # Droid session (per-AI)
+├── session_state_gemini.json   # Gemini session (per-AI)
+├── session_state_claude.json   # Claude session (per-AI)
+├── session_state_trae.json     # Trae session (per-AI)
+└── session_state.json          # Fallback (unknown AI)
 ```
 
 ## Compression Recovery
@@ -115,36 +148,26 @@ agi_bootstrap_session()
 // 3. Continue from active_task (don't start from scratch!)
 ```
 
-## Architecture
-
-```
-mcp-memori/
-├── index.js              # Main server (v14.0.0)
-├── safe-storage.js       # Multi-instance file locking
-├── package.json          # Dependencies
-├── memory_god_mode.json  # Memory database (gitignored)
-└── session_state.json    # Session state (gitignored)
-```
-
 ## Performance
 
 | Metric | Value |
 |--------|-------|
-| Total Memories | 394+ |
+| Total Memories | 390+ |
 | Embedding Coverage | 100% |
 | Lessons Stored | 27+ |
-| Work Logs | 174+ |
+| Work Logs | 177+ |
 | Sessions Tracked | 6+ |
-| Concurrent Instances | 50+ tested |
+| Concurrent AI | 4 supported |
 
 ## Version History
 
 | Version | Changes |
 |---------|---------|
+| v14.2.0 | Multi-platform, multi-AI, per-AI session, get_memory_info |
+| v14.1.0 | Fixed agi_get_lessons, expanded tags |
 | v14.0.0 | 11 tools, SafeStorage, compact responses |
 | v13.0.0 | Graph relations, episodic buffer, clustering |
 | v12.0.0 | Auto-inject lessons, summary detection |
-| v11.0.0 | Compression detection, auto-cleanup |
 
 ## Dependencies
 
@@ -152,6 +175,7 @@ mcp-memori/
 - `@xenova/transformers` - Neural embeddings
 - `graphology` - Knowledge graph
 - `proper-lockfile` - File locking
+- `async-lock` - Async mutex
 - `compute-cosine-similarity` - Vector similarity
 
 ## License
@@ -159,6 +183,8 @@ mcp-memori/
 MIT
 
 ---
-**Version**: 14.0.0-OPTIMIZED  
+**Version**: 14.2.0-MULTIPLATFORM  
 **Status**: Production Ready  
-**Multi-Instance**: Safe for 2-3 AI simultaneously
+**Multi-Platform**: Linux, Windows, macOS  
+**Multi-AI**: Droid, Gemini, Claude, Trae  
+**Tools**: 12

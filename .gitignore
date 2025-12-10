@@ -3,5 +3,7 @@ memory_god_mode.json
 memory_god_mode.backup.json
 memory_god_mode.json.backup
 session_state.json
+session_state_*.json
+*.backup*
 *.log
 .DS_Store

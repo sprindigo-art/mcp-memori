@@ -13,18 +13,80 @@ import SafeLowDB from './safe-storage.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// --- VERSION 13.0.0 UPGRADE: ADVANCED MEMORY OPTIMIZATION ---
-// CHANGES FROM v12.0:
-// - AUTO-GENERATE GRAPH RELATIONS dari content (NLP extraction)
-// - SMART EPISODIC BUFFER dengan auto-detection
-// - EMBEDDING CLUSTERING tool untuk group similar memories
-// - PREDICTIVE RETRIEVAL berdasarkan access patterns
-// - OPTIMIZED SEMANTIC DEDUPLICATION dengan dynamic threshold
-// - All v12.0 features retained (compact response, auto-inject lessons)
-const VERSION = "14.0.0-OPTIMIZED"; // Reduced from 15 to 11 tools
+// --- PLATFORM DETECTION (v14.2 Multi-Platform Support) ---
+import { execSync } from 'child_process';
+const os = await import('os');
+const platform = os.default.platform();
+const homeDir = os.default.homedir();
 
-// --- SESSION STATE FILE (Cross-MCP Sync) ---
-const SESSION_STATE_FILE = path.join(__dirname, 'session_state.json');
+// --- VERSION 14.2.0 UPGRADE: MULTI-PLATFORM MULTI-AI SUPPORT ---
+// CHANGES FROM v14.1:
+// - MULTI-PLATFORM: Linux + Windows support
+// - MULTI-AI: Droid/Factory, Antigravity/Gemini, Trae, Claude detection
+// - SEPARATE SESSION STATE per AI (avoid conflicts)
+// - SHARED DATABASE for memories (all AI learn from same lessons)
+// - NEW TOOL: get_memory_info for reporting
+// All v14.1 features retained (fixed agi_get_lessons, compact response, auto-inject)
+const VERSION = "14.2.0-MULTIPLATFORM";
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// v14.2 MULTI-PLATFORM MULTI-AI DETECTION
+// Supports: Linux + Windows | Droid/Factory, Antigravity, Trae, Gemini, Claude
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// AI detection based on environment and parent process
+function detectCurrentAI() {
+    const env = process.env;
+    
+    // Check for specific AI indicators from environment
+    if (env.FACTORY_API_KEY || env.DROID_SESSION || env.FACTORY_SESSION) return 'droid';
+    if (env.ANTHROPIC_API_KEY || env.CLAUDE_SESSION) return 'claude';
+    if (env.GOOGLE_AI_KEY || env.GEMINI_SESSION || process.argv.includes('--gemini')) return 'gemini';
+    if (env.TRAE_SESSION || process.argv.includes('--trae')) return 'trae';
+    
+    // Check parent process name (Linux only)
+    if (platform !== 'win32') {
+        try {
+            const parentPid = process.ppid;
+            const parentCmd = execSync(`ps -p ${parentPid} -o comm=`, { encoding: 'utf-8' }).trim().toLowerCase();
+            if (parentCmd.includes('antigravity') || parentCmd.includes('gemini')) return 'gemini';
+            if (parentCmd.includes('trae')) return 'trae';
+            if (parentCmd.includes('droid') || parentCmd.includes('factory')) return 'droid';
+            if (parentCmd.includes('claude')) return 'claude';
+        } catch (e) {
+            // Ignore errors
+        }
+    }
+    
+    return 'unknown';
+}
+
+// Detect platform info
+function detectPlatform() {
+    return {
+        os: platform,
+        isWindows: platform === 'win32',
+        isLinux: platform === 'linux',
+        isMac: platform === 'darwin',
+        homeDir: homeDir,
+        nodeVersion: process.version,
+        pid: process.pid
+    };
+}
+
+// Get session state file path per AI (avoid conflicts)
+function getSessionStateFile() {
+    const ai = detectCurrentAI();
+    const suffix = ai !== 'unknown' ? `_${ai}` : '';
+    return path.join(__dirname, `session_state${suffix}.json`);
+}
+
+// Legacy path for backward compatibility
+const SESSION_STATE_FILE_LEGACY = path.join(__dirname, 'session_state.json');
+
+// --- SESSION STATE FILE (Per-AI to avoid conflicts) ---
+// NOTE: Each AI gets its own session_state file, but SHARES the main database
+const SESSION_STATE_FILE = getSessionStateFile();
 
 // Session state for enforcement
 let sessionState = {
@@ -36,22 +98,49 @@ let sessionState = {
     instance_id: `${process.pid}_${Date.now()}`
 };
 
-// Load or create session state
+// Load or create session state (v14.2: with migration from legacy file)
 function loadSessionState() {
+    const currentAI = detectCurrentAI();
+    console.error(`[MCP-MEMORY v${VERSION}] AI detected: ${currentAI}, Session file: ${SESSION_STATE_FILE}`);
+    
     try {
-        if (fs.existsSync(SESSION_STATE_FILE)) {
-            const data = JSON.parse(fs.readFileSync(SESSION_STATE_FILE, 'utf-8'));
+        // v14.2: Try AI-specific file first, then fallback to legacy
+        let stateFile = SESSION_STATE_FILE;
+        let migrated = false;
+        
+        if (!fs.existsSync(SESSION_STATE_FILE) && fs.existsSync(SESSION_STATE_FILE_LEGACY)) {
+            // Migration: Copy from legacy file for first-time AI-specific setup
+            console.error(`[MCP-MEMORY v${VERSION}] Migrating from legacy session state...`);
+            stateFile = SESSION_STATE_FILE_LEGACY;
+            migrated = true;
+        }
+        
+        if (fs.existsSync(stateFile)) {
+            const data = JSON.parse(fs.readFileSync(stateFile, 'utf-8'));
             // Only restore if same day (reset daily)
             const today = new Date().toISOString().split('T')[0];
             if (data.date === today) {
                 sessionState = { ...sessionState, ...data };
-                console.error(`[MCP-MEMORY v${VERSION}] Session state loaded: bootstrap=${data.bootstrap_called}`);
+                // v14.2: Add AI info to state
+                sessionState.detected_ai = currentAI;
+                console.error(`[MCP-MEMORY v${VERSION}] Session state loaded: bootstrap=${data.bootstrap_called}, AI=${currentAI}`);
+                
+                // If migrated, save to new AI-specific file
+                if (migrated) {
+                    saveSessionState();
+                    console.error(`[MCP-MEMORY v${VERSION}] Migration complete: ${SESSION_STATE_FILE}`);
+                }
             } else {
                 // New day, reset state
                 sessionState.bootstrap_called = false;
+                sessionState.detected_ai = currentAI;
                 saveSessionState();
-                console.error(`[MCP-MEMORY v${VERSION}] New day - session state reset`);
+                console.error(`[MCP-MEMORY v${VERSION}] New day - session state reset for AI: ${currentAI}`);
             }
+        } else {
+            // No session file exists - create new
+            sessionState.detected_ai = currentAI;
+            console.error(`[MCP-MEMORY v${VERSION}] No session state found, creating new for AI: ${currentAI}`);
         }
     } catch (e) {
         console.error(`[MCP-MEMORY v${VERSION}] Session state load error: ${e.message}`);
@@ -345,30 +434,56 @@ async function semanticDeduplicate(forceThreshold = null) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// v10.0 AUTO-RETRIEVE LESSON (Before dangerous actions)
+// v14.1 AUTO-RETRIEVE LESSON (ENHANCED - Expanded tag matching + Lower threshold)
 // ═══════════════════════════════════════════════════════════════════════════════
+const LESSON_TAGS = [
+    'lesson', 'mistake', 'error', 'failure', 'bug', 'fix', 'correction', 
+    'root_cause', 'critical', 'IMPORTANT', 'warning', 'success', 'solution',
+    'anti-pattern', 'best_practice', 'tip', 'insight', 'discovery'
+];
+
+function hasLessonTag(tags) {
+    if (!tags || !Array.isArray(tags)) return false;
+    return tags.some(t => LESSON_TAGS.some(lt => t.toLowerCase().includes(lt.toLowerCase())));
+}
+
 async function autoRetrieveLesson(taskContext) {
     try {
-        const query = `${taskContext} lesson mistake error kesalahan gagal`;
+        // Enhanced query with more keywords
+        const query = `${taskContext} lesson mistake error kesalahan gagal failure fix solution correction`;
         const queryVec = await getEmbedding(query);
+        const taskLower = taskContext.toLowerCase();
         
-        // Find relevant lessons
+        // Find relevant lessons with expanded tag matching
         const lessons = db.data.vectors
-            .filter(v => v.tags && (v.tags.includes('lesson') || v.tags.includes('mistake')))
+            .filter(v => hasLessonTag(v.tags))
             .map(v => {
                 if (!v.embedding || !Array.isArray(v.embedding)) return null;
-                const score = similarity(queryVec, v.embedding);
+                let score = similarity(queryVec, v.embedding);
+                
+                // Boost for exact task context match
+                const contentLower = (v.content || '').toLowerCase();
+                if (contentLower.includes(taskLower.substring(0, 30))) score += 0.15;
+                
+                // Boost for critical/important tags
+                if (v.tags?.some(t => ['critical', 'IMPORTANT', 'ALWAYS_LOAD'].includes(t))) {
+                    score += 0.10;
+                }
+                
+                // Boost for higher confidence memories
+                score += (v.confidence || 50) / 500;
+                
                 return { ...v, score };
             })
-            .filter(v => v && v.score > 0.5)
+            .filter(v => v && v.score > 0.35) // LOWERED threshold from 0.5 to 0.35
             .sort((a, b) => b.score - a.score)
-            .slice(0, 3);
+            .slice(0, 5); // Increased from 3 to 5
         
         return lessons.map(l => ({
             id: l.id,
             content: l.content.substring(0, 300),
             tags: l.tags,
-            score: l.score
+            score: l.score.toFixed(2)
         }));
     } catch (e) {
         console.error(`[MCP-MEMORY v${VERSION}] Auto-retrieve lesson error: ${e.message}`);
@@ -1373,6 +1488,120 @@ async function runEnhancedDreamCycle() {
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// v14.2 GET MEMORY INFO (Multi-Platform Multi-AI Reporting)
+// ═══════════════════════════════════════════════════════════════════════════════
+function getAllMemoryInfo() {
+    const currentAI = detectCurrentAI();
+    const platformInfo = detectPlatform();
+    
+    // Get database stats
+    const dbStats = {
+        total_memories: db.data.vectors?.length || 0,
+        episodic_buffer: db.data.episodic_buffer?.length || 0,
+        sessions_tracked: Object.keys(db.data.sessions || {}).length,
+        conversation_history: db.data.conversation_history?.length || 0,
+        active_session: db.data.active_session,
+        active_task: db.data.active_task?.description || null
+    };
+    
+    // Get lesson stats
+    const lessonCount = db.data.vectors?.filter(v => 
+        v.tags && (v.tags.includes('lesson') || v.tags.includes('mistake'))
+    ).length || 0;
+    
+    const workLogCount = db.data.vectors?.filter(v => 
+        v.tags && v.tags.includes('work_log')
+    ).length || 0;
+    
+    // Get session state files info
+    const sessionFiles = [];
+    const aiTypes = ['droid', 'gemini', 'claude', 'trae'];
+    for (const ai of aiTypes) {
+        const filePath = path.join(__dirname, `session_state_${ai}.json`);
+        if (fs.existsSync(filePath)) {
+            try {
+                const data = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
+                sessionFiles.push({
+                    ai: ai,
+                    path: filePath,
+                    bootstrap_called: data.bootstrap_called,
+                    last_updated: data.last_updated
+                });
+            } catch (e) {
+                sessionFiles.push({ ai: ai, path: filePath, error: e.message });
+            }
+        }
+    }
+    // Check legacy file
+    if (fs.existsSync(SESSION_STATE_FILE_LEGACY)) {
+        try {
+            const data = JSON.parse(fs.readFileSync(SESSION_STATE_FILE_LEGACY, 'utf-8'));
+            sessionFiles.push({
+                ai: 'legacy',
+                path: SESSION_STATE_FILE_LEGACY,
+                bootstrap_called: data.bootstrap_called,
+                last_updated: data.last_updated
+            });
+        } catch (e) {
+            sessionFiles.push({ ai: 'legacy', path: SESSION_STATE_FILE_LEGACY, error: e.message });
+        }
+    }
+    
+    // Database file info
+    let dbFileInfo = { path: DB_PATH, exists: false };
+    try {
+        if (fs.existsSync(DB_PATH)) {
+            const stats = fs.statSync(DB_PATH);
+            dbFileInfo = {
+                path: DB_PATH,
+                exists: true,
+                size_bytes: stats.size,
+                size_human: formatBytes(stats.size),
+                modified: stats.mtime.toISOString()
+            };
+        }
+    } catch (e) {
+        dbFileInfo.error = e.message;
+    }
+    
+    return {
+        version: VERSION,
+        multi_platform: {
+            current_platform: platformInfo,
+            supported_platforms: ['linux', 'win32', 'darwin']
+        },
+        multi_ai: {
+            current_ai: currentAI,
+            supported_ai: ['droid', 'gemini', 'claude', 'trae'],
+            session_state_files: sessionFiles,
+            note: "Each AI has separate session_state, but SHARES the main database"
+        },
+        database: {
+            file: dbFileInfo,
+            stats: dbStats,
+            lesson_count: lessonCount,
+            work_log_count: workLogCount
+        },
+        current_session: {
+            session_id: sessionState.session_id,
+            bootstrap_called: sessionState.bootstrap_called,
+            bootstrap_timestamp: sessionState.bootstrap_timestamp,
+            detected_ai: sessionState.detected_ai
+        },
+        timestamp: new Date().toISOString()
+    };
+}
+
+// Helper function for formatting bytes
+function formatBytes(bytes) {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
 // --- SERVER SETUP ---
 const server = new Server(
   { name: "mcp-memori-persistent", version: VERSION }, // v7.0.0 - Persistent Intelligence
@@ -1500,6 +1729,15 @@ server.setRequestHandler(ListToolsRequestSchema, async () => {
           properties: {
             force_threshold: { type: "number", description: "Override automatic threshold (0.0-1.0). Leave empty for dynamic." }
           }
+        }
+      },
+      // v14.2: NEW TOOL - Multi-Platform Multi-AI Info
+      {
+        name: "get_memory_info",
+        description: "Get comprehensive memory system info including multi-platform support, multi-AI detection, database stats, and session state. Useful for debugging and monitoring.",
+        inputSchema: {
+          type: "object",
+          properties: {}
         }
       }
     ]
@@ -1983,11 +2221,25 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     };
   }
 
+  // v14.2: NEW HANDLER - Multi-Platform Multi-AI Info
+  if (request.params.name === "get_memory_info") {
+    const info = getAllMemoryInfo();
+    
+    return { 
+      content: [{ 
+        type: "text", 
+        text: JSON.stringify(info, null, 2) 
+      }] 
+    };
+  }
+
   throw new Error(`Tool ${request.params.name} not found`);
 });
 
 const transport = new StdioServerTransport();
 await server.connect(transport);
 
-// v14.0 Compact startup - 11 tools optimized
-console.error(`[MCP-MEMORY v${VERSION}] READY | Tools: 11 | Path: ${DB_PATH}`);
+// v14.2 Multi-Platform Multi-AI startup - 12 tools
+const currentAI = detectCurrentAI();
+const platformInfo = detectPlatform();
+console.error(`[MCP-MEMORY v${VERSION}] READY | Tools: 12 | AI: ${currentAI} | Platform: ${platformInfo.os} | Path: ${DB_PATH}`);
