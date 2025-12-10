@@ -130,12 +130,12 @@ mcp-memori/
 
 | Metric | Value |
 |--------|-------|
-| Total Memories | 275+ |
+| Total Memories | 394+ |
 | Embedding Coverage | 100% |
-| Lessons Stored | 21+ |
-| Work Logs | 69+ |
-| Sessions Tracked | 4+ |
-| Concurrent Instances | 38+ tested |
+| Lessons Stored | 27+ |
+| Work Logs | 174+ |
+| Sessions Tracked | 6+ |
+| Concurrent Instances | 50+ tested |
 
 ## Version History
 

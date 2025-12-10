@@ -1,7 +1,7 @@
 {
   "name": "mcp-cognitive-memory",
-  "version": "11.0.0",
-  "description": "MCP Memory Server v11.0.0 - 100% COMPLIANCE GUARANTEE via Architecture Exploit: Auto-Bootstrap, Auto-Capture, Response Poisoning, Lesson Injection.",
+  "version": "14.0.0",
+  "description": "MCP Cognitive Memory v14.0.0 - Advanced AI Memory System with Multi-Instance Support, Compression Recovery, Semantic Search, and Knowledge Graph.",
   "type": "module",
   "main": "index.js",
   "scripts": {
