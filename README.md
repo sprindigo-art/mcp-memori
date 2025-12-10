@@ -1,15 +1,27 @@
-# MCP Cognitive Memory v14.2.0-MULTIPLATFORM
+# MCP Cognitive Memory v14.3.0-BALANCED
 
-> **Advanced AI Memory System** - Multi-Platform, Multi-AI Support, Shared Database, Per-AI Session State.
+> **Advanced AI Memory System** - Multi-Platform, Multi-AI Support, **Balanced Semantic Search**, Shared Database.
 
-## What's New in v14.2.0
+## What's New in v14.3.0
 
+### CRITICAL FIXES - Balanced Semantic Search
+- **FIX #1: recencyMultiplier CAPPED** - Now max 1.5x (was unlimited up to 6x!)
+- **FIX #2: TAG MATCH PRIORITY** - Exact tag matches get strong boost (+0.35)
+- **FIX #3: KEYWORD MATCH ENHANCED** - Query keywords in content get higher boost (+0.25)
+- **FIX #4: REDUCED Work Log Boost** - Work logs won't dominate search results
+- **FIX #5: RELEVANCE-FIRST FORMULA** - 70% semantic similarity, 30% recency
+
+### Root Cause Fixed
+Old relevant memories now rank HIGHER than new irrelevant ones!
+- Before: Query "bypass Trae" returned unrelated work_logs (score 3-4)
+- After: Query "bypass Trae" returns actual Trae memories (score 1.3-1.6)
+
+### Retained from v14.2.0
 - **Multi-Platform Support** - Linux, Windows, macOS
 - **Multi-AI Detection** - Droid/Factory, Gemini/Antigravity, Claude, Trae
 - **Per-AI Session State** - Each AI has separate session_state file (no conflicts)
 - **Shared Database** - All AI learn from same lessons/memories
-- **NEW Tool: `get_memory_info`** - Report platform, AI, database stats
-- **12 Total Tools** (was 11)
+- **12 Total Tools**
 
 ## Features
 

@@ -1,6 +1,6 @@
 {
   "name": "mcp-cognitive-memory",
-  "version": "14.2.0",
+  "version": "14.3.0",
   "description": "MCP Cognitive Memory v14.2.0 - Multi-Platform Multi-AI Memory System with Shared Database, Per-AI Session State, Compression Recovery, Semantic Search, and Knowledge Graph.",
   "type": "module",
   "main": "index.js",

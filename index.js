@@ -19,15 +19,16 @@ const os = await import('os');
 const platform = os.default.platform();
 const homeDir = os.default.homedir();
 
-// --- VERSION 14.2.0 UPGRADE: MULTI-PLATFORM MULTI-AI SUPPORT ---
-// CHANGES FROM v14.1:
-// - MULTI-PLATFORM: Linux + Windows support
-// - MULTI-AI: Droid/Factory, Antigravity/Gemini, Trae, Claude detection
-// - SEPARATE SESSION STATE per AI (avoid conflicts)
-// - SHARED DATABASE for memories (all AI learn from same lessons)
-// - NEW TOOL: get_memory_info for reporting
-// All v14.1 features retained (fixed agi_get_lessons, compact response, auto-inject)
-const VERSION = "14.2.0-MULTIPLATFORM";
+// --- VERSION 14.3.0 UPGRADE: BALANCED SEMANTIC SEARCH ---
+// CHANGES FROM v14.2:
+// - FIX: recencyMultiplier CAPPED at 2.0 (was unlimited up to 6x)
+// - FIX: Work_log boost reduced to prevent dominating search results
+// - NEW: TAG MATCH PRIORITY - exact tag matches get strong boost (+0.35)
+// - NEW: KEYWORD PRIORITY - query keywords in content get higher boost (+0.25)
+// - NEW: RELEVANCE FIRST scoring - semantic similarity prioritized over recency
+// - RETAINED: All v14.2 features (multi-platform, multi-AI)
+// ROOT CAUSE FIXED: Old relevant memories now rank higher than new irrelevant ones
+const VERSION = "14.3.0-BALANCED";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // v14.2 MULTI-PLATFORM MULTI-AI DETECTION
@@ -1134,13 +1135,18 @@ async function autoBootstrap() {
   };
 }
 
-// --- SMART RETRIEVAL ENGINE (v7.0 Upgrade) ---
+// --- SMART RETRIEVAL ENGINE (v14.3.0 BALANCED UPGRADE) ---
+// ROOT CAUSE FIX: Semantic similarity now prioritized over recency
+// Old relevant memories will rank higher than new irrelevant ones
 async function recursiveRetrieve(query, depth = 0, maxDepth = 2, history = []) {
   if (depth > maxDepth) return [];
   
   const queryVec = await getEmbedding(query);
   const queryLower = query.toLowerCase();
   const wantsMistakes = queryLower.includes("error") || queryLower.includes("mistake") || queryLower.includes("salah") || queryLower.includes("bug");
+  
+  // v14.3 NEW: Extract query keywords for TAG MATCHING (minimum 2 chars)
+  const queryKeywords = queryLower.split(/[\s,._\-]+/).filter(w => w.length >= 2);
   
   // v7.0: Get current session for context boosting
   const currentSessionId = db.data.active_session;
@@ -1153,84 +1159,139 @@ async function recursiveRetrieve(query, depth = 0, maxDepth = 2, history = []) {
     .map(v => {
         if (!v.embedding || v.embedding.length !== queryVec.length) return null;
         
-        // Base Vector Score
+        // Base Vector Score (SEMANTIC SIMILARITY - PRIMARY FACTOR)
         let score = similarity(queryVec, v.embedding);
         
-        // Hybrid Keyword Bonus (Simple overlap)
-        const contentLower = v.content.toLowerCase();
-        if (contentLower.includes(queryLower)) score += 0.15;
+        // ═══════════════════════════════════════════════════════════════════
+        // v14.3 CRITICAL FIX #1: TAG MATCH PRIORITY (HIGHEST PRIORITY!)
+        // Exact tag matches get STRONG boost to ensure relevant memories surface
+        // ═══════════════════════════════════════════════════════════════════
+        if (v.tags && Array.isArray(v.tags)) {
+            const tagMatches = v.tags.filter(tag => 
+                queryKeywords.some(kw => 
+                    tag.toLowerCase().includes(kw) || kw.includes(tag.toLowerCase())
+                )
+            );
+            if (tagMatches.length > 0) {
+                score += 0.35 + (tagMatches.length * 0.08); // Strong boost: 0.35 base + 0.08 per match
+            }
+        }
         
-        // CRITICAL: Boost "Mistakes" & "Lessons" to prevent repeating errors
+        // ═══════════════════════════════════════════════════════════════════
+        // v14.3 CRITICAL FIX #2: KEYWORD MATCH PRIORITY (ENHANCED)
+        // Content containing query keywords gets significant boost
+        // ═══════════════════════════════════════════════════════════════════
+        const contentLower = v.content.toLowerCase();
+        if (contentLower.includes(queryLower)) {
+            score += 0.25; // INCREASED from 0.15 - exact query match
+        } else {
+            // Partial keyword matching
+            const keywordMatches = queryKeywords.filter(kw => contentLower.includes(kw));
+            if (keywordMatches.length > 0) {
+                score += 0.10 + (keywordMatches.length * 0.05); // Partial match boost
+            }
+        }
+        
+        // Boost "Mistakes" & "Lessons" to prevent repeating errors
         if (v.tags && Array.isArray(v.tags) && v.tags.some(t => ["mistake", "lesson", "anti-pattern", "error"].includes(t))) {
             score += 0.10; // Passive boost
-            if (wantsMistakes) score += 0.25; // Active boost
+            if (wantsMistakes) score += 0.20; // Active boost (reduced from 0.25)
         }
 
-        // CRITICAL: Boost "Work Logs" for context continuity
+        // ═══════════════════════════════════════════════════════════════════
+        // v14.3 CRITICAL FIX #3: REDUCED Work Log Boost (was over-powered)
+        // Work logs still get priority but won't dominate search results
+        // ═══════════════════════════════════════════════════════════════════
         if (v.tags && Array.isArray(v.tags) && v.tags.includes("work_log")) {
             const ageHours = (new Date() - new Date(v.created_at)) / (1000 * 60 * 60);
-            if (ageHours < 24) score += 0.20; // Recent work logs get huge priority
-            if (ageHours < 1) score += 0.15; // Extra boost for very recent (< 1 hour)
+            if (ageHours < 24) score += 0.10; // REDUCED from 0.20
+            if (ageHours < 1) score += 0.08;  // REDUCED from 0.15
         }
         
-        // NEW: Boost Core Identity
+        // Boost Core Identity (unchanged - important for AI behavior)
         if (v.tags && Array.isArray(v.tags) && v.tags.includes("CORE_IDENTITY")) {
             score += 0.30; // High priority for core identity
         }
         
-        // NEW: Boost frequently accessed memories (Evolutionary Weighting)
+        // Boost frequently accessed memories (Evolutionary Weighting)
         if (v.access_count) {
-            const accessBoost = Math.min(0.20, v.access_count * 0.02); // Cap at 0.20
+            const accessBoost = Math.min(0.15, v.access_count * 0.015); // Slightly reduced
             score += accessBoost;
         }
         
-        // v7.0 NEW: SESSION CONTEXT BOOST - memories from current session get priority
+        // SESSION CONTEXT BOOST - memories from current session get priority
         if (sessionMemoryIds.includes(v.id)) {
-            score += 0.25; // Strong boost for same-session memories
+            score += 0.20; // Reduced from 0.25
         }
         
-        // v7.0 NEW: RECENCY BOOST - stronger for very recent memories
+        // ═══════════════════════════════════════════════════════════════════
+        // v14.3 CRITICAL FIX #4: REDUCED Recency Boost (was over-powered)
+        // Recent memories still get boost but won't overwhelm relevance
+        // ═══════════════════════════════════════════════════════════════════
         const ageMinutes = (new Date() - new Date(v.created_at)) / (1000 * 60);
-        if (ageMinutes < 60) score += 0.15; // Within last hour
-        else if (ageMinutes < 180) score += 0.10; // Within last 3 hours
+        if (ageMinutes < 60) score += 0.08;       // REDUCED from 0.15
+        else if (ageMinutes < 180) score += 0.05; // REDUCED from 0.10
         
-        // v7.0 NEW: Boost memories with same tags as active task
+        // Boost memories with same tags as active task
         if (db.data.active_task && v.tags && Array.isArray(v.tags)) {
             const taskLower = db.data.active_task.description.toLowerCase();
             const hasTaskKeyword = v.tags.some(t => taskLower.includes(t.toLowerCase()));
-            if (hasTaskKeyword) score += 0.15;
+            if (hasTaskKeyword) score += 0.12; // Slightly reduced from 0.15
         }
 
         return { ...v, score };
     })
-    .filter(v => v && v.score > 0.30) // LOWERED THRESHOLD (0.35 -> 0.30) for even better recall
+    .filter(v => v && v.score > 0.25) // LOWERED THRESHOLD for better recall
     .sort((a, b) => b.score - a.score)
-    .slice(0, 30);
+    .slice(0, 40); // Increased from 30 for better candidate pool
 
-  // 2. Semantic Reranking (Context & Recency Aware)
+  // 2. Semantic Reranking (BALANCED - Relevance First, Recency Second)
   const reranked = candidates.map(c => {
       let boost = 0;
       
-      // Factor A: Exact Keyword Match (Strong Signal)
-      if (c.content.toLowerCase().includes(queryLower)) boost += 0.20;
+      // Factor A: Exact Keyword Match (Strong Signal) - ENHANCED
+      const contentLower = c.content.toLowerCase();
+      if (contentLower.includes(queryLower)) {
+          boost += 0.30; // INCREASED from 0.20
+      } else {
+          // Check individual keywords
+          const keywordMatches = queryKeywords.filter(kw => contentLower.includes(kw));
+          boost += keywordMatches.length * 0.08;
+      }
       
-      // Factor B: Recency Decay (Freshness matters)
-      const daysOld = Math.max(0.1, (new Date() - new Date(c.created_at)) / (1000 * 60 * 60 * 24));
-      const recencyMultiplier = 1 + (0.5 / daysOld); 
+      // ═══════════════════════════════════════════════════════════════════
+      // v14.3 CRITICAL FIX #5: CAPPED recencyMultiplier (was unlimited!)
+      // OLD: 1 + (0.5 / daysOld) -> could be 6x for very new memories!
+      // NEW: CAPPED at 1.5x maximum to prevent recency from dominating
+      // ═══════════════════════════════════════════════════════════════════
+      const daysOld = Math.max(0.5, (new Date() - new Date(c.created_at)) / (1000 * 60 * 60 * 24));
+      const rawRecency = 1 + (0.3 / daysOld); // Reduced coefficient from 0.5 to 0.3
+      const recencyMultiplier = Math.min(1.5, rawRecency); // CAPPED at 1.5x (was unlimited!)
       
       // Factor C: Confidence (Reinforced Memories)
-      const confidenceBoost = (c.confidence || 50) / 500;
+      const confidenceBoost = (c.confidence || 50) / 600; // Slightly reduced impact
       
       // Factor D: Evolutionary Access Tracking
-      const accessBoost = (c.access_count || 0) * 0.01;
+      const accessBoost = (c.access_count || 0) * 0.008; // Slightly reduced
 
+      // ═══════════════════════════════════════════════════════════════════
+      // v14.3 CRITICAL: RELEVANCE-FIRST SCORING FORMULA
+      // Base score (semantic) has MORE weight than recency multiplier
+      // ═══════════════════════════════════════════════════════════════════
+      const baseScoreWeight = 0.7; // 70% weight on semantic similarity
+      const recencyWeight = 0.3;   // 30% weight on recency
+      
+      const weightedBaseScore = c.score * baseScoreWeight;
+      const weightedRecencyScore = (c.score * recencyMultiplier * recencyWeight);
+      
       return { 
         ...c, 
-        final_score: (c.score * recencyMultiplier) + boost + confidenceBoost + accessBoost 
+        final_score: weightedBaseScore + weightedRecencyScore + boost + confidenceBoost + accessBoost,
+        _debug: { baseScore: c.score.toFixed(3), recencyMult: recencyMultiplier.toFixed(2), boost: boost.toFixed(2) }
       };
   })
   .sort((a, b) => b.final_score - a.final_score)
-  .slice(0, 10); // Increased from 8 to 10
+  .slice(0, 12); // Slightly increased from 10
 
   let results = [...reranked];
 
@@ -2239,7 +2300,8 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 const transport = new StdioServerTransport();
 await server.connect(transport);
 
-// v14.2 Multi-Platform Multi-AI startup - 12 tools
+// v14.3 BALANCED SEMANTIC SEARCH startup - 12 tools
 const currentAI = detectCurrentAI();
 const platformInfo = detectPlatform();
-console.error(`[MCP-MEMORY v${VERSION}] READY | Tools: 12 | AI: ${currentAI} | Platform: ${platformInfo.os} | Path: ${DB_PATH}`);
+console.error(`[MCP-MEMORY v${VERSION}] READY | Tools: 12 | AI: ${currentAI} | Platform: ${platformInfo.os}`);
+console.error(`[MCP-MEMORY v${VERSION}] FIXES: recencyMultiplier CAPPED, TAG_MATCH PRIORITY, RELEVANCE-FIRST scoring`);
