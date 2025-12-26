@@ -1,0 +1,222 @@
+{
+  "timestamp": "2025-12-26T04:24:46.254Z",
+  "project_id": "semantic-gap-1766723073696",
+  "version": "3.2-SEMANTIC-GAP",
+  "dataset_size": 20,
+  "query_count": 20,
+  "metrics": {
+    "keyword_only": {
+      "hits": 6,
+      "recall": 0.3
+    },
+    "hybrid": {
+      "hits": 14,
+      "recall": 0.7
+    }
+  },
+  "improvement_pct": 133.33333333333331,
+  "meets_10pct_threshold": true,
+  "detailed_results": [
+    {
+      "query": "air mendidih",
+      "expected": "Proses Evaporasi Air",
+      "found": true,
+      "top_title": "Cuaca Dengan Presipitasi",
+      "keyword_score": 3.466,
+      "vector_score": 0.657,
+      "keyword_would_find": true,
+      "hybrid_would_find": true
+    },
+    {
+      "query": "mobil",
+      "expected": "Kendaraan Beroda Empat",
+      "found": false,
+      "top_title": "Notifikasi Dorong Mobile",
+      "keyword_score": 3.783,
+      "vector_score": 0.655,
+      "keyword_would_find": true,
+      "hybrid_would_find": true
+    },
+    {
+      "query": "laptop",
+      "expected": "Perangkat Komputasi Portabel",
+      "found": true,
+      "top_title": "Perangkat Komputasi Portabel",
+      "keyword_score": 0,
+      "vector_score": 0.659,
+      "keyword_would_find": false,
+      "hybrid_would_find": true
+    },
+    {
+      "query": "hujan",
+      "expected": "Cuaca Dengan Presipitasi",
+      "found": false,
+      "top_title": "Minuman Berkafein Pagi",
+      "keyword_score": 0,
+      "vector_score": 0.679,
+      "keyword_would_find": false,
+      "hybrid_would_find": true
+    },
+    {
+      "query": "makanan pedas",
+      "expected": "Rasa Pedas Dari Cabai",
+      "found": true,
+      "top_title": "Rasa Pedas Dari Cabai",
+      "keyword_score": 4.524,
+      "vector_score": 0.626,
+      "keyword_would_find": true,
+      "hybrid_would_find": true
+    },
+    {
+      "query": "kucing",
+      "expected": "Mamalia Peliharaan Berbulu",
+      "found": false,
+      "top_title": "Instrumen Keuangan Ekuitas",
+      "keyword_score": 0,
+      "vector_score": 0.622,
+      "keyword_would_find": false,
+      "hybrid_would_find": true
+    },
+    {
+      "query": "saham investasi",
+      "expected": "Instrumen Keuangan Ekuitas",
+      "found": false,
+      "top_title": "Cuaca Dengan Presipitasi",
+      "keyword_score": 0,
+      "vector_score": 0.648,
+      "keyword_would_find": false,
+      "hybrid_would_find": true
+    },
+    {
+      "query": "lari jogging",
+      "expected": "Olahraga Lari Jarak Jauh",
+      "found": true,
+      "top_title": "Olahraga Lari Jarak Jauh",
+      "keyword_score": 4.524,
+      "vector_score": 0.605,
+      "keyword_would_find": true,
+      "hybrid_would_find": true
+    },
+    {
+      "query": "python programming",
+      "expected": "Bahasa Pemrograman Ular",
+      "found": true,
+      "top_title": "Bahasa Pemrograman Ular",
+      "keyword_score": 0,
+      "vector_score": 0.63,
+      "keyword_would_find": false,
+      "hybrid_would_find": true
+    },
+    {
+      "query": "database postgresql",
+      "expected": "Sistem Manajemen Basis Data Relasional",
+      "found": true,
+      "top_title": "Sistem Manajemen Basis Data Relasional",
+      "keyword_score": 0,
+      "vector_score": 0.676,
+      "keyword_would_find": false,
+      "hybrid_would_find": true
+    },
+    {
+      "query": "cloud aws",
+      "expected": "Layanan Komputasi Awan",
+      "found": true,
+      "top_title": "Layanan Komputasi Awan",
+      "keyword_score": 0,
+      "vector_score": 0.695,
+      "keyword_would_find": false,
+      "hybrid_would_find": true
+    },
+    {
+      "query": "https ssl",
+      "expected": "Protokol Transfer Hypertext Aman",
+      "found": true,
+      "top_title": "Protokol Transfer Hypertext Aman",
+      "keyword_score": 4.827,
+      "vector_score": 0.721,
+      "keyword_would_find": true,
+      "hybrid_would_find": true
+    },
+    {
+      "query": "docker container",
+      "expected": "Kontainerisasi Aplikasi",
+      "found": false,
+      "top_title": "Jejaring Sosial Profesional",
+      "keyword_score": 0,
+      "vector_score": 0.582,
+      "keyword_would_find": false,
+      "hybrid_would_find": true
+    },
+    {
+      "query": "microservices api",
+      "expected": "Arsitektur Layanan Mikro",
+      "found": true,
+      "top_title": "Layanan Komputasi Awan",
+      "keyword_score": 0,
+      "vector_score": 0.61,
+      "keyword_would_find": false,
+      "hybrid_would_find": true
+    },
+    {
+      "query": "push notification",
+      "expected": "Notifikasi Dorong Mobile",
+      "found": true,
+      "top_title": "Alat Pembayaran Digital",
+      "keyword_score": 0,
+      "vector_score": 0.612,
+      "keyword_would_find": false,
+      "hybrid_would_find": true
+    },
+    {
+      "query": "kopi coffee",
+      "expected": "Minuman Berkafein Pagi",
+      "found": false,
+      "top_title": "Olahraga Lari Jarak Jauh",
+      "keyword_score": 0,
+      "vector_score": 0.626,
+      "keyword_would_find": false,
+      "hybrid_would_find": true
+    },
+    {
+      "query": "e-wallet gopay",
+      "expected": "Alat Pembayaran Digital",
+      "found": true,
+      "top_title": "Alat Pembayaran Digital",
+      "keyword_score": 0,
+      "vector_score": 0.656,
+      "keyword_would_find": false,
+      "hybrid_would_find": true
+    },
+    {
+      "query": "linkedin networking",
+      "expected": "Jejaring Sosial Profesional",
+      "found": true,
+      "top_title": "Jejaring Sosial Profesional",
+      "keyword_score": 6.356,
+      "vector_score": 0.671,
+      "keyword_would_find": true,
+      "hybrid_would_find": true
+    },
+    {
+      "query": "git github",
+      "expected": "Penyimpanan Kode Sumber Terdistribusi",
+      "found": true,
+      "top_title": "Penyimpanan Kode Sumber Terdistribusi",
+      "keyword_score": 0,
+      "vector_score": 0.615,
+      "keyword_would_find": false,
+      "hybrid_would_find": true
+    },
+    {
+      "query": "deep learning neural",
+      "expected": "Pembelajaran Mesin Dalam",
+      "found": true,
+      "top_title": "Pembelajaran Mesin Dalam",
+      "keyword_score": 4.722,
+      "vector_score": 0.679,
+      "keyword_would_find": true,
+      "hybrid_would_find": true
+    }
+  ],
+  "status": "PASS"
+}
