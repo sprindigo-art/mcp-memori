@@ -1,0 +1,90 @@
+{
+  "timestamp": "2025-12-26T04:22:08.083Z",
+  "project_id": "benchmark-ab-1766722923043",
+  "version": "3.2-AB",
+  "method": "A/B Comparison with controlled experiment",
+  "dataset": {
+    "items": 120,
+    "queries": 50,
+    "iterations": 3
+  },
+  "metrics": {
+    "keyword_only": {
+      "recall_at_5": 0.88,
+      "precision_at_5": 0.352,
+      "semantic_hit_rate": 0.1,
+      "vector_contribution": 0
+    },
+    "hybrid": {
+      "recall_at_5": 0.88,
+      "precision_at_5": 0.352,
+      "semantic_hit_rate": 0.1,
+      "vector_contribution": 0.686
+    }
+  },
+  "hybrid_effectiveness": "high",
+  "regression_gate": {
+    "self_healing": "PASS",
+    "auditability": "PASS",
+    "embedding_backend": "local",
+    "embedding_mode": "hybrid",
+    "hybrid_effectiveness": "high"
+  },
+  "comparison": {
+    "recall_improvement": 0,
+    "recall_improvement_pct": 0,
+    "precision_improvement": 0,
+    "precision_improvement_pct": 0,
+    "semantic_improvement": 0,
+    "hybrid_better_recall": false,
+    "hybrid_better_precision": false,
+    "hybrid_better_semantic": false,
+    "meets_10pct_threshold": false,
+    "no_regression": true
+  },
+  "iterations": [
+    {
+      "iteration": 1,
+      "keyword_only": {
+        "recall": 0.88,
+        "precision": 0.352,
+        "semantic_hit_rate": 0.1
+      },
+      "hybrid": {
+        "recall": 0.88,
+        "precision": 0.352,
+        "semantic_hit_rate": 0.1,
+        "vector_contribution": 0.686
+      }
+    },
+    {
+      "iteration": 2,
+      "keyword_only": {
+        "recall": 0.88,
+        "precision": 0.352,
+        "semantic_hit_rate": 0.1
+      },
+      "hybrid": {
+        "recall": 0.88,
+        "precision": 0.352,
+        "semantic_hit_rate": 0.1,
+        "vector_contribution": 0.686
+      }
+    },
+    {
+      "iteration": 3,
+      "keyword_only": {
+        "recall": 0.88,
+        "precision": 0.352,
+        "semantic_hit_rate": 0.1
+      },
+      "hybrid": {
+        "recall": 0.88,
+        "precision": 0.352,
+        "semantic_hit_rate": 0.1,
+        "vector_contribution": 0.686
+      }
+    }
+  ],
+  "status": "PARITY"
+}

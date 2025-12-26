@@ -1,0 +1,609 @@
+{
+    "queries": [
+        {
+            "query": "air panas mendidih",
+            "expected_ids": [
+                "sem-001",
+                "sem-002"
+            ],
+            "semantic_synonyms": [
+                "hot water",
+                "boiling",
+                "steam",
+                "suhu tinggi"
+            ]
+        },
+        {
+            "query": "mobil cepat kendaraan",
+            "expected_ids": [
+                "sem-003",
+                "sem-004"
+            ],
+            "semantic_synonyms": [
+                "fast car",
+                "vehicle",
+                "automotive",
+                "sepeda motor"
+            ]
+        },
+        {
+            "query": "laptop komputer rusak",
+            "expected_ids": [
+                "sem-005",
+                "sem-006"
+            ],
+            "semantic_synonyms": [
+                "pc error",
+                "device crash",
+                "computer dead"
+            ]
+        },
+        {
+            "query": "server down offline",
+            "expected_ids": [
+                "sem-007",
+                "sem-008"
+            ],
+            "semantic_synonyms": [
+                "outage",
+                "system crash",
+                "vm down"
+            ]
+        },
+        {
+            "query": "database postgresql config",
+            "expected_ids": [
+                "sem-009",
+                "sem-010"
+            ],
+            "semantic_synonyms": [
+                "db tuning",
+                "mysql config",
+                "database optimization"
+            ]
+        },
+        {
+            "query": "login authentication error",
+            "expected_ids": [
+                "sem-011",
+                "sem-012"
+            ],
+            "semantic_synonyms": [
+                "auth problem",
+                "access denied",
+                "permission denied"
+            ]
+        },
+        {
+            "query": "memory ram leak",
+            "expected_ids": [
+                "sem-013",
+                "sem-014"
+            ],
+            "semantic_synonyms": [
+                "heap overflow",
+                "cpu bottleneck",
+                "high load"
+            ]
+        },
+        {
+            "query": "network connection timeout",
+            "expected_ids": [
+                "sem-015",
+                "sem-016"
+            ],
+            "semantic_synonyms": [
+                "latency",
+                "firewall block",
+                "connection refused"
+            ]
+        },
+        {
+            "query": "deployment pipeline failed",
+            "expected_ids": [
+                "sem-017",
+                "sem-018"
+            ],
+            "semantic_synonyms": [
+                "release failed",
+                "k8s error",
+                "container crash"
+            ]
+        },
+        {
+            "query": "api rate limit error",
+            "expected_ids": [
+                "sem-019",
+                "sem-020"
+            ],
+            "semantic_synonyms": [
+                "throttling",
+                "endpoint fail",
+                "server error"
+            ]
+        },
+        {
+            "query": "user preference setting",
+            "expected_ids": [
+                "sem-021",
+                "sem-022"
+            ],
+            "semantic_synonyms": [
+                "language setting",
+                "format output",
+                "json format"
+            ]
+        },
+        {
+            "query": "checkout payment failed",
+            "expected_ids": [
+                "sem-023",
+                "sem-024"
+            ],
+            "semantic_synonyms": [
+                "cart error",
+                "transaksi failed",
+                "abandoned cart"
+            ]
+        },
+        {
+            "query": "encryption security key",
+            "expected_ids": [
+                "sem-025",
+                "sem-026"
+            ],
+            "semantic_synonyms": [
+                "secret rotation",
+                "ssl certificate",
+                "tls expiring"
+            ]
+        },
+        {
+            "query": "backup database failed",
+            "expected_ids": [
+                "sem-027",
+                "sem-028"
+            ],
+            "semantic_synonyms": [
+                "recovery point",
+                "failover test",
+                "dr test"
+            ]
+        },
+        {
+            "query": "logging monitoring metrics",
+            "expected_ids": [
+                "sem-029",
+                "sem-030"
+            ],
+            "semantic_synonyms": [
+                "elk stack",
+                "grafana dashboard",
+                "centralized logs"
+            ]
+        },
+        {
+            "query": "makanan pedas panas",
+            "expected_ids": [
+                "sem-031",
+                "sem-032"
+            ],
+            "semantic_synonyms": [
+                "spicy food",
+                "cabe",
+                "hot food"
+            ]
+        },
+        {
+            "query": "cuaca dingin hujan",
+            "expected_ids": [
+                "sem-033",
+                "sem-034"
+            ],
+            "semantic_synonyms": [
+                "cold weather",
+                "rainy season",
+                "suhu rendah"
+            ]
+        },
+        {
+            "query": "error handling debugging",
+            "expected_ids": [
+                "sem-035",
+                "sem-036"
+            ],
+            "semantic_synonyms": [
+                "exception handling",
+                "troubleshooting",
+                "bug fixing"
+            ]
+        },
+        {
+            "query": "git merge conflict",
+            "expected_ids": [
+                "sem-037",
+                "sem-038"
+            ],
+            "semantic_synonyms": [
+                "branch issue",
+                "version control",
+                "git workflow"
+            ]
+        },
+        {
+            "query": "data validation input",
+            "expected_ids": [
+                "sem-039",
+                "sem-040"
+            ],
+            "semantic_synonyms": [
+                "form error",
+                "schema validation",
+                "input sanitization"
+            ]
+        },
+        {
+            "query": "cache redis memory",
+            "expected_ids": [
+                "sem-041",
+                "sem-042"
+            ],
+            "semantic_synonyms": [
+                "cache invalidation",
+                "redis error",
+                "cache busting"
+            ]
+        },
+        {
+            "query": "queue message processing",
+            "expected_ids": [
+                "sem-043",
+                "sem-044"
+            ],
+            "semantic_synonyms": [
+                "job failed",
+                "worker error",
+                "processing lag"
+            ]
+        },
+        {
+            "query": "search elasticsearch index",
+            "expected_ids": [
+                "sem-045",
+                "sem-046"
+            ],
+            "semantic_synonyms": [
+                "reindexing",
+                "search performance",
+                "slow query"
+            ]
+        },
+        {
+            "query": "file upload storage",
+            "expected_ids": [
+                "sem-047",
+                "sem-048"
+            ],
+            "semantic_synonyms": [
+                "upload failed",
+                "disk full",
+                "quota exceeded"
+            ]
+        },
+        {
+            "query": "image video media",
+            "expected_ids": [
+                "sem-049",
+                "sem-050"
+            ],
+            "semantic_synonyms": [
+                "image optimization",
+                "encoding failed",
+                "media processing"
+            ]
+        },
+        {
+            "query": "mobile app crash",
+            "expected_ids": [
+                "sem-051",
+                "sem-052"
+            ],
+            "semantic_synonyms": [
+                "app error",
+                "ios build failed",
+                "xcode error"
+            ]
+        },
+        {
+            "query": "android ios permission",
+            "expected_ids": [
+                "sem-053",
+                "sem-054"
+            ],
+            "semantic_synonyms": [
+                "app authorization",
+                "push notification",
+                "fcm setup"
+            ]
+        },
+        {
+            "query": "email delivery spam",
+            "expected_ids": [
+                "sem-055",
+                "sem-056"
+            ],
+            "semantic_synonyms": [
+                "smtp failed",
+                "email bounce",
+                "deliverability issue"
+            ]
+        },
+        {
+            "query": "analytics tracking testing",
+            "expected_ids": [
+                "sem-057",
+                "sem-058"
+            ],
+            "semantic_synonyms": [
+                "google analytics",
+                "ab test",
+                "conversion tracking"
+            ]
+        },
+        {
+            "query": "alat kantor furniture",
+            "expected_ids": [
+                "sem-059",
+                "sem-060"
+            ],
+            "semantic_synonyms": [
+                "stationery",
+                "office equipment",
+                "desk chair"
+            ]
+        },
+        {
+            "query": "transportasi bus kereta",
+            "expected_ids": [
+                "sem-061",
+                "sem-062"
+            ],
+            "semantic_synonyms": [
+                "public transport",
+                "ojek online",
+                "ride hailing"
+            ]
+        },
+        {
+            "query": "demam panas obat",
+            "expected_ids": [
+                "sem-063",
+                "sem-064"
+            ],
+            "semantic_synonyms": [
+                "fever",
+                "paracetamol",
+                "pain reliever"
+            ]
+        },
+        {
+            "query": "investasi saham tabungan",
+            "expected_ids": [
+                "sem-065",
+                "sem-066"
+            ],
+            "semantic_synonyms": [
+                "stock investment",
+                "bank savings",
+                "deposito"
+            ]
+        },
+        {
+            "query": "makanan sehat resep",
+            "expected_ids": [
+                "sem-067",
+                "sem-068"
+            ],
+            "semantic_synonyms": [
+                "nasi goreng",
+                "healthy food",
+                "nutritious meal"
+            ]
+        },
+        {
+            "query": "olahraga kardio kekuatan",
+            "expected_ids": [
+                "sem-069",
+                "sem-070"
+            ],
+            "semantic_synonyms": [
+                "cardio exercise",
+                "weight lifting",
+                "strength training"
+            ]
+        },
+        {
+            "query": "belajar bahasa kursus",
+            "expected_ids": [
+                "sem-071",
+                "sem-072"
+            ],
+            "semantic_synonyms": [
+                "english learning",
+                "online course",
+                "e-learning"
+            ]
+        },
+        {
+            "query": "musik jazz pop",
+            "expected_ids": [
+                "sem-073",
+                "sem-074"
+            ],
+            "semantic_synonyms": [
+                "jazz music",
+                "indonesian pop",
+                "lagu indo"
+            ]
+        },
+        {
+            "query": "film action drama",
+            "expected_ids": [
+                "sem-075",
+                "sem-076"
+            ],
+            "semantic_synonyms": [
+                "action movie",
+                "drama series",
+                "tv series"
+            ]
+        },
+        {
+            "query": "python javascript coding",
+            "expected_ids": [
+                "sem-077",
+                "sem-078"
+            ],
+            "semantic_synonyms": [
+                "programming",
+                "web scripting",
+                "python language"
+            ]
+        },
+        {
+            "query": "machine learning neural",
+            "expected_ids": [
+                "sem-079",
+                "sem-080"
+            ],
+            "semantic_synonyms": [
+                "ml model",
+                "deep learning",
+                "ai training"
+            ]
+        },
+        {
+            "query": "security vulnerability hacking",
+            "expected_ids": [
+                "sem-081",
+                "sem-082"
+            ],
+            "semantic_synonyms": [
+                "pentest",
+                "security hole",
+                "ethical hacking"
+            ]
+        },
+        {
+            "query": "docker container kubernetes",
+            "expected_ids": [
+                "sem-083",
+                "sem-084"
+            ],
+            "semantic_synonyms": [
+                "containerization",
+                "cicd",
+                "continuous integration"
+            ]
+        },
+        {
+            "query": "microservices api gateway",
+            "expected_ids": [
+                "sem-085",
+                "sem-086"
+            ],
+            "semantic_synonyms": [
+                "distributed system",
+                "api management",
+                "service oriented"
+            ]
+        },
+        {
+            "query": "load balancer replication",
+            "expected_ids": [
+                "sem-087",
+                "sem-088"
+            ],
+            "semantic_synonyms": [
+                "traffic distribution",
+                "database ha",
+                "data sync"
+            ]
+        },
+        {
+            "query": "cloud migration cost",
+            "expected_ids": [
+                "sem-089",
+                "sem-090"
+            ],
+            "semantic_synonyms": [
+                "cloud adoption",
+                "cost optimization",
+                "spending reduction"
+            ]
+        },
+        {
+            "query": "incident response postmortem",
+            "expected_ids": [
+                "sem-091",
+                "sem-092"
+            ],
+            "semantic_synonyms": [
+                "outage response",
+                "rca",
+                "incident review"
+            ]
+        },
+        {
+            "query": "user onboarding support",
+            "expected_ids": [
+                "sem-093",
+                "sem-094"
+            ],
+            "semantic_synonyms": [
+                "guided tour",
+                "customer service",
+                "help desk"
+            ]
+        },
+        {
+            "query": "roadmap sprint planning",
+            "expected_ids": [
+                "sem-095",
+                "sem-096"
+            ],
+            "semantic_synonyms": [
+                "product plan",
+                "scrum planning",
+                "agile meeting"
+            ]
+        },
+        {
+            "query": "code review technical debt",
+            "expected_ids": [
+                "sem-097",
+                "sem-098"
+            ],
+            "semantic_synonyms": [
+                "peer review",
+                "legacy code",
+                "refactor"
+            ]
+        },
+        {
+            "query": "documentation knowledge base",
+            "expected_ids": [
+                "sem-099",
+                "sem-100"
+            ],
+            "semantic_synonyms": [
+                "technical writing",
+                "kb article",
+                "info base"
+            ]
+        }
+    ],
+    "total_queries": 50,
+    "total_items": 120,
+    "purpose": "Semantic search benchmark with synonyms and paraphrases"
+}

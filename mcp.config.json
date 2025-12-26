@@ -1,0 +1,38 @@
+{
+    "name": "mcp-memori",
+    "version": "1.0.0",
+    "description": "Production-grade MCP Memory Server",
+    "transport": {
+        "type": "stdio"
+    },
+    "tools": [
+        {
+            "name": "memory.search",
+            "description": "Cari memori berdasarkan query dengan hybrid search (vector + keyword + recency)"
+        },
+        {
+            "name": "memory.get",
+            "description": "Ambil detail lengkap satu memori berdasarkan ID"
+        },
+        {
+            "name": "memory.upsert",
+            "description": "Simpan atau update memori (idempotent, concurrency-safe)"
+        },
+        {
+            "name": "memory.forget",
+            "description": "Soft-delete memori dengan alasan"
+        },
+        {
+            "name": "memory.summarize",
+            "description": "Ringkasan project: state terkini, keputusan, runbooks, guardrails"
+        },
+        {
+            "name": "memory.feedback",
+            "description": "Beri feedback pada memori (useful/not_relevant/wrong)"
+        },
+        {
+            "name": "memory.maintain",
+            "description": "Maintenance: dedup, conflict detection, prune, compact, loopbreaker"
+        }
+    ]
+}

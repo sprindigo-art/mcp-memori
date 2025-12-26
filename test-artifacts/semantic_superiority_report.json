@@ -1,0 +1,1425 @@
+{
+  "timestamp": "2025-12-26T04:33:22.329Z",
+  "version": "3.2-SEMANTIC-SUPERIORITY",
+  "methodology": {
+    "fix_1": "Two separate modes: keyword_only (vector=0) vs hybrid (vector>0)",
+    "fix_2": "Semantic stress dataset with NO keyword overlap",
+    "fix_3": "Weight tuning grid test (0.2, 0.3, 0.4)",
+    "fix_4": "Decision rule: claim valid only if improvement >= 10%"
+  },
+  "dataset": {
+    "type": "semantic_stress",
+    "items": 50,
+    "queries": 50,
+    "description": "Items with NO keyword overlap - only semantic matching works"
+  },
+  "results": [
+    {
+      "config": "vector_0.2",
+      "weights": {
+        "keyword": 0.6,
+        "vector": 0.2,
+        "recency": 0.2
+      },
+      "keyword_recall": 0.2,
+      "hybrid_recall": 0.64,
+      "improvement_pct": 219.99999999999997,
+      "meets_threshold": true,
+      "detailed": [
+        {
+          "query": "air mendidih",
+          "expected": "Proses Evaporasi Cairan",
+          "found": true,
+          "keyword_score": 3.349,
+          "vector_score": 0.655,
+          "keyword_finds": true,
+          "hybrid_finds": true
+        },
+        {
+          "query": "boiling water",
+          "expected": "Proses Evaporasi Cairan",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.627,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "uap panas",
+          "expected": "Proses Evaporasi Cairan",
+          "found": false,
+          "keyword_score": 4.209,
+          "vector_score": 0.649,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "mobil",
+          "expected": "Transportasi Darat Bermesin",
+          "found": true,
+          "keyword_score": 3.526,
+          "vector_score": 0.647,
+          "keyword_finds": true,
+          "hybrid_finds": true
+        },
+        {
+          "query": "car",
+          "expected": "Transportasi Darat Bermesin",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.611,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "automobile",
+          "expected": "Transportasi Darat Bermesin",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.666,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "laptop",
+          "expected": "Perangkat Komputasi Portabel",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.658,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "notebook computer",
+          "expected": "Perangkat Komputasi Portabel",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.665,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "komputer jinjing",
+          "expected": "Perangkat Komputasi Portabel",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.627,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "hujan",
+          "expected": "Presipitasi Atmosfer",
+          "found": false,
+          "keyword_score": 0,
+          "vector_score": 0.669,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "rain",
+          "expected": "Presipitasi Atmosfer",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.609,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "cuaca basah",
+          "expected": "Presipitasi Atmosfer",
+          "found": true,
+          "keyword_score": 4.125,
+          "vector_score": 0.642,
+          "keyword_finds": true,
+          "hybrid_finds": true
+        },
+        {
+          "query": "makanan pedas",
+          "expected": "Sensasi Capsaicin",
+          "found": false,
+          "keyword_score": 0,
+          "vector_score": 0.698,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "cabe",
+          "expected": "Sensasi Capsaicin",
+          "found": false,
+          "keyword_score": 0,
+          "vector_score": 0.586,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "spicy food",
+          "expected": "Sensasi Capsaicin",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.734,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "kucing",
+          "expected": "Mamalia Domestik Berbulu",
+          "found": false,
+          "keyword_score": 0,
+          "vector_score": 0.645,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "cat",
+          "expected": "Mamalia Domestik Berbulu",
+          "found": false,
+          "keyword_score": 0,
+          "vector_score": 0.602,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "kitten",
+          "expected": "Mamalia Domestik Berbulu",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.587,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "saham",
+          "expected": "Instrumen Ekuitas Pasar Modal",
+          "found": false,
+          "keyword_score": 0,
+          "vector_score": 0.611,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "stock",
+          "expected": "Instrumen Ekuitas Pasar Modal",
+          "found": false,
+          "keyword_score": 0,
+          "vector_score": 0.622,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "investasi bursa",
+          "expected": "Instrumen Ekuitas Pasar Modal",
+          "found": true,
+          "keyword_score": 5.758,
+          "vector_score": 0.733,
+          "keyword_finds": true,
+          "hybrid_finds": true
+        },
+        {
+          "query": "lari",
+          "expected": "Aktivitas Aerobik Kaki",
+          "found": false,
+          "keyword_score": 0,
+          "vector_score": 0.62,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "jogging",
+          "expected": "Aktivitas Aerobik Kaki",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.599,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "marathon",
+          "expected": "Aktivitas Aerobik Kaki",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.557,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "python",
+          "expected": "Bahasa Scripting Serpent",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.685,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "programming language",
+          "expected": "Bahasa Scripting Serpent",
+          "found": true,
+          "keyword_score": 6.245,
+          "vector_score": 0.665,
+          "keyword_finds": true,
+          "hybrid_finds": true
+        },
+        {
+          "query": "coding python",
+          "expected": "Bahasa Scripting Serpent",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.662,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "database",
+          "expected": "RDBMS dengan SQL",
+          "found": true,
+          "keyword_score": 2.872,
+          "vector_score": 0.761,
+          "keyword_finds": true,
+          "hybrid_finds": true
+        },
+        {
+          "query": "postgresql",
+          "expected": "RDBMS dengan SQL",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.701,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "mysql",
+          "expected": "RDBMS dengan SQL",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.724,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "cloud computing",
+          "expected": "Infrastruktur On-Demand",
+          "found": true,
+          "keyword_score": 10.324,
+          "vector_score": 0.784,
+          "keyword_finds": true,
+          "hybrid_finds": true
+        },
+        {
+          "query": "aws",
+          "expected": "Infrastruktur On-Demand",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.617,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "azure",
+          "expected": "Infrastruktur On-Demand",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.643,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "https",
+          "expected": "Protokol Web Terenkripsi",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.642,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "ssl certificate",
+          "expected": "Protokol Web Terenkripsi",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.664,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "enkripsi web",
+          "expected": "Protokol Web Terenkripsi",
+          "found": true,
+          "keyword_score": 3.351,
+          "vector_score": 0.777,
+          "keyword_finds": true,
+          "hybrid_finds": true
+        },
+        {
+          "query": "docker",
+          "expected": "Virtualisasi Ringan Aplikasi",
+          "found": false,
+          "keyword_score": 0,
+          "vector_score": 0.786,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "container",
+          "expected": "Virtualisasi Ringan Aplikasi",
+          "found": false,
+          "keyword_score": 5.942,
+          "vector_score": 0.735,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "kubernetes",
+          "expected": "Virtualisasi Ringan Aplikasi",
+          "found": false,
+          "keyword_score": 0,
+          "vector_score": 0.743,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "microservices",
+          "expected": "Arsitektur Komponen Terdistribusi",
+          "found": false,
+          "keyword_score": 0,
+          "vector_score": 0.713,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "distributed system",
+          "expected": "Arsitektur Komponen Terdistribusi",
+          "found": false,
+          "keyword_score": 4.519,
+          "vector_score": 0.73,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "api gateway",
+          "expected": "Arsitektur Komponen Terdistribusi",
+          "found": true,
+          "keyword_score": 7.536,
+          "vector_score": 0.846,
+          "keyword_finds": true,
+          "hybrid_finds": true
+        },
+        {
+          "query": "push notification",
+          "expected": "Pesan Real-time Mobile",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.648,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "fcm",
+          "expected": "Pesan Real-time Mobile",
+          "found": false,
+          "keyword_score": 0,
+          "vector_score": 0.64,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "mobile alert",
+          "expected": "Pesan Real-time Mobile",
+          "found": true,
+          "keyword_score": 4.389,
+          "vector_score": 0.678,
+          "keyword_finds": true,
+          "hybrid_finds": true
+        },
+        {
+          "query": "kopi",
+          "expected": "Minuman Seduh Berkafein",
+          "found": false,
+          "keyword_score": 0,
+          "vector_score": 0.656,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "coffee",
+          "expected": "Minuman Seduh Berkafein",
+          "found": false,
+          "keyword_score": 0,
+          "vector_score": 0.616,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "espresso",
+          "expected": "Minuman Seduh Berkafein",
+          "found": false,
+          "keyword_score": 0,
+          "vector_score": 0.599,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "e-wallet",
+          "expected": "Pembayaran Nontunai Digital",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.686,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "gopay",
+          "expected": "Pembayaran Nontunai Digital",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.621,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        }
+      ]
+    },
+    {
+      "config": "vector_0.3",
+      "weights": {
+        "keyword": 0.5,
+        "vector": 0.3,
+        "recency": 0.2
+      },
+      "keyword_recall": 0.2,
+      "hybrid_recall": 0.64,
+      "improvement_pct": 219.99999999999997,
+      "meets_threshold": true,
+      "detailed": [
+        {
+          "query": "air mendidih",
+          "expected": "Proses Evaporasi Cairan",
+          "found": true,
+          "keyword_score": 3.364,
+          "vector_score": 0.655,
+          "keyword_finds": true,
+          "hybrid_finds": true
+        },
+        {
+          "query": "boiling water",
+          "expected": "Proses Evaporasi Cairan",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.627,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "uap panas",
+          "expected": "Proses Evaporasi Cairan",
+          "found": false,
+          "keyword_score": 4.175,
+          "vector_score": 0.649,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "mobil",
+          "expected": "Transportasi Darat Bermesin",
+          "found": true,
+          "keyword_score": 3.442,
+          "vector_score": 0.647,
+          "keyword_finds": true,
+          "hybrid_finds": true
+        },
+        {
+          "query": "car",
+          "expected": "Transportasi Darat Bermesin",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.611,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "automobile",
+          "expected": "Transportasi Darat Bermesin",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.666,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "laptop",
+          "expected": "Perangkat Komputasi Portabel",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.658,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "notebook computer",
+          "expected": "Perangkat Komputasi Portabel",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.665,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "komputer jinjing",
+          "expected": "Perangkat Komputasi Portabel",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.627,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "hujan",
+          "expected": "Presipitasi Atmosfer",
+          "found": false,
+          "keyword_score": 0,
+          "vector_score": 0.669,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "rain",
+          "expected": "Presipitasi Atmosfer",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.609,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "cuaca basah",
+          "expected": "Presipitasi Atmosfer",
+          "found": true,
+          "keyword_score": 4.098,
+          "vector_score": 0.642,
+          "keyword_finds": true,
+          "hybrid_finds": true
+        },
+        {
+          "query": "makanan pedas",
+          "expected": "Sensasi Capsaicin",
+          "found": false,
+          "keyword_score": 0,
+          "vector_score": 0.698,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "cabe",
+          "expected": "Sensasi Capsaicin",
+          "found": false,
+          "keyword_score": 0,
+          "vector_score": 0.586,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "spicy food",
+          "expected": "Sensasi Capsaicin",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.734,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "kucing",
+          "expected": "Mamalia Domestik Berbulu",
+          "found": false,
+          "keyword_score": 0,
+          "vector_score": 0.645,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "cat",
+          "expected": "Mamalia Domestik Berbulu",
+          "found": false,
+          "keyword_score": 0,
+          "vector_score": 0.602,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "kitten",
+          "expected": "Mamalia Domestik Berbulu",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.587,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "saham",
+          "expected": "Instrumen Ekuitas Pasar Modal",
+          "found": false,
+          "keyword_score": 0,
+          "vector_score": 0.611,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "stock",
+          "expected": "Instrumen Ekuitas Pasar Modal",
+          "found": false,
+          "keyword_score": 0,
+          "vector_score": 0.622,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "investasi bursa",
+          "expected": "Instrumen Ekuitas Pasar Modal",
+          "found": true,
+          "keyword_score": 5.49,
+          "vector_score": 0.733,
+          "keyword_finds": true,
+          "hybrid_finds": true
+        },
+        {
+          "query": "lari",
+          "expected": "Aktivitas Aerobik Kaki",
+          "found": false,
+          "keyword_score": 0,
+          "vector_score": 0.62,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "jogging",
+          "expected": "Aktivitas Aerobik Kaki",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.599,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "marathon",
+          "expected": "Aktivitas Aerobik Kaki",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.557,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "python",
+          "expected": "Bahasa Scripting Serpent",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.685,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "programming language",
+          "expected": "Bahasa Scripting Serpent",
+          "found": true,
+          "keyword_score": 5.812,
+          "vector_score": 0.665,
+          "keyword_finds": true,
+          "hybrid_finds": true
+        },
+        {
+          "query": "coding python",
+          "expected": "Bahasa Scripting Serpent",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.662,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "database",
+          "expected": "RDBMS dengan SQL",
+          "found": true,
+          "keyword_score": 2.903,
+          "vector_score": 0.761,
+          "keyword_finds": true,
+          "hybrid_finds": true
+        },
+        {
+          "query": "postgresql",
+          "expected": "RDBMS dengan SQL",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.701,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "mysql",
+          "expected": "RDBMS dengan SQL",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.724,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "cloud computing",
+          "expected": "Infrastruktur On-Demand",
+          "found": true,
+          "keyword_score": 9.88,
+          "vector_score": 0.784,
+          "keyword_finds": true,
+          "hybrid_finds": true
+        },
+        {
+          "query": "aws",
+          "expected": "Infrastruktur On-Demand",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.617,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "azure",
+          "expected": "Infrastruktur On-Demand",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.643,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "https",
+          "expected": "Protokol Web Terenkripsi",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.642,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "ssl certificate",
+          "expected": "Protokol Web Terenkripsi",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.664,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "enkripsi web",
+          "expected": "Protokol Web Terenkripsi",
+          "found": true,
+          "keyword_score": 3.31,
+          "vector_score": 0.777,
+          "keyword_finds": true,
+          "hybrid_finds": true
+        },
+        {
+          "query": "docker",
+          "expected": "Virtualisasi Ringan Aplikasi",
+          "found": false,
+          "keyword_score": 0,
+          "vector_score": 0.786,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "container",
+          "expected": "Virtualisasi Ringan Aplikasi",
+          "found": false,
+          "keyword_score": 5.925,
+          "vector_score": 0.735,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "kubernetes",
+          "expected": "Virtualisasi Ringan Aplikasi",
+          "found": false,
+          "keyword_score": 0,
+          "vector_score": 0.743,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "microservices",
+          "expected": "Arsitektur Komponen Terdistribusi",
+          "found": false,
+          "keyword_score": 0,
+          "vector_score": 0.713,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "distributed system",
+          "expected": "Arsitektur Komponen Terdistribusi",
+          "found": false,
+          "keyword_score": 4.499,
+          "vector_score": 0.73,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "api gateway",
+          "expected": "Arsitektur Komponen Terdistribusi",
+          "found": true,
+          "keyword_score": 7.495,
+          "vector_score": 0.846,
+          "keyword_finds": true,
+          "hybrid_finds": true
+        },
+        {
+          "query": "push notification",
+          "expected": "Pesan Real-time Mobile",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.648,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "fcm",
+          "expected": "Pesan Real-time Mobile",
+          "found": false,
+          "keyword_score": 0,
+          "vector_score": 0.64,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "mobile alert",
+          "expected": "Pesan Real-time Mobile",
+          "found": true,
+          "keyword_score": 4.213,
+          "vector_score": 0.678,
+          "keyword_finds": true,
+          "hybrid_finds": true
+        },
+        {
+          "query": "kopi",
+          "expected": "Minuman Seduh Berkafein",
+          "found": false,
+          "keyword_score": 0,
+          "vector_score": 0.656,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "coffee",
+          "expected": "Minuman Seduh Berkafein",
+          "found": false,
+          "keyword_score": 0,
+          "vector_score": 0.616,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "espresso",
+          "expected": "Minuman Seduh Berkafein",
+          "found": false,
+          "keyword_score": 0,
+          "vector_score": 0.599,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "e-wallet",
+          "expected": "Pembayaran Nontunai Digital",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.686,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "gopay",
+          "expected": "Pembayaran Nontunai Digital",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.621,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        }
+      ]
+    },
+    {
+      "config": "vector_0.4",
+      "weights": {
+        "keyword": 0.4,
+        "vector": 0.4,
+        "recency": 0.2
+      },
+      "keyword_recall": 0.2,
+      "hybrid_recall": 0.64,
+      "improvement_pct": 219.99999999999997,
+      "meets_threshold": true,
+      "detailed": [
+        {
+          "query": "air mendidih",
+          "expected": "Proses Evaporasi Cairan",
+          "found": true,
+          "keyword_score": 3.377,
+          "vector_score": 0.655,
+          "keyword_finds": true,
+          "hybrid_finds": true
+        },
+        {
+          "query": "boiling water",
+          "expected": "Proses Evaporasi Cairan",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.627,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "uap panas",
+          "expected": "Proses Evaporasi Cairan",
+          "found": false,
+          "keyword_score": 4.146,
+          "vector_score": 0.649,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "mobil",
+          "expected": "Transportasi Darat Bermesin",
+          "found": true,
+          "keyword_score": 3.371,
+          "vector_score": 0.647,
+          "keyword_finds": true,
+          "hybrid_finds": true
+        },
+        {
+          "query": "car",
+          "expected": "Transportasi Darat Bermesin",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.611,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "automobile",
+          "expected": "Transportasi Darat Bermesin",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.666,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "laptop",
+          "expected": "Perangkat Komputasi Portabel",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.658,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "notebook computer",
+          "expected": "Perangkat Komputasi Portabel",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.665,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "komputer jinjing",
+          "expected": "Perangkat Komputasi Portabel",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.627,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "hujan",
+          "expected": "Presipitasi Atmosfer",
+          "found": false,
+          "keyword_score": 0,
+          "vector_score": 0.669,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "rain",
+          "expected": "Presipitasi Atmosfer",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.609,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "cuaca basah",
+          "expected": "Presipitasi Atmosfer",
+          "found": true,
+          "keyword_score": 4.074,
+          "vector_score": 0.642,
+          "keyword_finds": true,
+          "hybrid_finds": true
+        },
+        {
+          "query": "makanan pedas",
+          "expected": "Sensasi Capsaicin",
+          "found": false,
+          "keyword_score": 0,
+          "vector_score": 0.698,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "cabe",
+          "expected": "Sensasi Capsaicin",
+          "found": false,
+          "keyword_score": 0,
+          "vector_score": 0.586,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "spicy food",
+          "expected": "Sensasi Capsaicin",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.734,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "kucing",
+          "expected": "Mamalia Domestik Berbulu",
+          "found": false,
+          "keyword_score": 0,
+          "vector_score": 0.645,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "cat",
+          "expected": "Mamalia Domestik Berbulu",
+          "found": false,
+          "keyword_score": 0,
+          "vector_score": 0.602,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "kitten",
+          "expected": "Mamalia Domestik Berbulu",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.587,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "saham",
+          "expected": "Instrumen Ekuitas Pasar Modal",
+          "found": false,
+          "keyword_score": 0,
+          "vector_score": 0.611,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "stock",
+          "expected": "Instrumen Ekuitas Pasar Modal",
+          "found": false,
+          "keyword_score": 0,
+          "vector_score": 0.622,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "investasi bursa",
+          "expected": "Instrumen Ekuitas Pasar Modal",
+          "found": true,
+          "keyword_score": 5.3,
+          "vector_score": 0.733,
+          "keyword_finds": true,
+          "hybrid_finds": true
+        },
+        {
+          "query": "lari",
+          "expected": "Aktivitas Aerobik Kaki",
+          "found": false,
+          "keyword_score": 0,
+          "vector_score": 0.62,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "jogging",
+          "expected": "Aktivitas Aerobik Kaki",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.599,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "marathon",
+          "expected": "Aktivitas Aerobik Kaki",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.557,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "python",
+          "expected": "Bahasa Scripting Serpent",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.685,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "programming language",
+          "expected": "Bahasa Scripting Serpent",
+          "found": true,
+          "keyword_score": 5.541,
+          "vector_score": 0.665,
+          "keyword_finds": true,
+          "hybrid_finds": true
+        },
+        {
+          "query": "coding python",
+          "expected": "Bahasa Scripting Serpent",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.662,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "database",
+          "expected": "RDBMS dengan SQL",
+          "found": true,
+          "keyword_score": 2.932,
+          "vector_score": 0.761,
+          "keyword_finds": true,
+          "hybrid_finds": true
+        },
+        {
+          "query": "postgresql",
+          "expected": "RDBMS dengan SQL",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.701,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "mysql",
+          "expected": "RDBMS dengan SQL",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.724,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "cloud computing",
+          "expected": "Infrastruktur On-Demand",
+          "found": true,
+          "keyword_score": 9.604,
+          "vector_score": 0.784,
+          "keyword_finds": true,
+          "hybrid_finds": true
+        },
+        {
+          "query": "aws",
+          "expected": "Infrastruktur On-Demand",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.617,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "azure",
+          "expected": "Infrastruktur On-Demand",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.643,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "https",
+          "expected": "Protokol Web Terenkripsi",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.642,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "ssl certificate",
+          "expected": "Protokol Web Terenkripsi",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.664,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "enkripsi web",
+          "expected": "Protokol Web Terenkripsi",
+          "found": true,
+          "keyword_score": 3.274,
+          "vector_score": 0.777,
+          "keyword_finds": true,
+          "hybrid_finds": true
+        },
+        {
+          "query": "docker",
+          "expected": "Virtualisasi Ringan Aplikasi",
+          "found": false,
+          "keyword_score": 0,
+          "vector_score": 0.786,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "container",
+          "expected": "Virtualisasi Ringan Aplikasi",
+          "found": false,
+          "keyword_score": 5.909,
+          "vector_score": 0.735,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "kubernetes",
+          "expected": "Virtualisasi Ringan Aplikasi",
+          "found": false,
+          "keyword_score": 0,
+          "vector_score": 0.743,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "microservices",
+          "expected": "Arsitektur Komponen Terdistribusi",
+          "found": false,
+          "keyword_score": 0,
+          "vector_score": 0.713,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "distributed system",
+          "expected": "Arsitektur Komponen Terdistribusi",
+          "found": false,
+          "keyword_score": 4.482,
+          "vector_score": 0.73,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "api gateway",
+          "expected": "Arsitektur Komponen Terdistribusi",
+          "found": true,
+          "keyword_score": 7.459,
+          "vector_score": 0.846,
+          "keyword_finds": true,
+          "hybrid_finds": true
+        },
+        {
+          "query": "push notification",
+          "expected": "Pesan Real-time Mobile",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.648,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "fcm",
+          "expected": "Pesan Real-time Mobile",
+          "found": false,
+          "keyword_score": 0,
+          "vector_score": 0.64,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "mobile alert",
+          "expected": "Pesan Real-time Mobile",
+          "found": true,
+          "keyword_score": 4.077,
+          "vector_score": 0.678,
+          "keyword_finds": true,
+          "hybrid_finds": true
+        },
+        {
+          "query": "kopi",
+          "expected": "Minuman Seduh Berkafein",
+          "found": false,
+          "keyword_score": 0,
+          "vector_score": 0.656,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "coffee",
+          "expected": "Minuman Seduh Berkafein",
+          "found": false,
+          "keyword_score": 0,
+          "vector_score": 0.616,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "espresso",
+          "expected": "Minuman Seduh Berkafein",
+          "found": false,
+          "keyword_score": 0,
+          "vector_score": 0.599,
+          "keyword_finds": false,
+          "hybrid_finds": false
+        },
+        {
+          "query": "e-wallet",
+          "expected": "Pembayaran Nontunai Digital",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.686,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        },
+        {
+          "query": "gopay",
+          "expected": "Pembayaran Nontunai Digital",
+          "found": true,
+          "keyword_score": 0,
+          "vector_score": 0.621,
+          "keyword_finds": false,
+          "hybrid_finds": true
+        }
+      ]
+    }
+  ],
+  "best_config": {
+    "name": "vector_0.2",
+    "weights": {
+      "keyword": 0.6,
+      "vector": 0.2,
+      "recency": 0.2
+    },
+    "keyword_recall": 0.2,
+    "hybrid_recall": 0.64,
+    "improvement_pct": 219.99999999999997
+  },
+  "decision": {
+    "meets_10pct_threshold": true,
+    "verdict": "SEMANTIC_SUPERIORITY_PROVEN"
+  }
+}
