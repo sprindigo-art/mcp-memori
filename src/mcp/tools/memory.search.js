@@ -58,7 +58,7 @@ export async function execute(params) {
         tenant_id: tenantId = 'local-user',
         types = [],
         tags = [],
-        limit = 10,
+        limit = 50,
         override_quarantine: overrideQuarantine = false,
         allow_relations: allowRelations = false
     } = params;
@@ -105,28 +105,13 @@ export async function execute(params) {
         // Rerank results
         const reranked = rerank(rawResults, searchQuery, { maxResults: limit });
 
-        // Format results - LAYER 1,3 Enhanced
+        // Format results - EXTREME LIGHTWEIGHT (ANTI-TRUNCATION)
+        // Only essential fields for discovery. Use memory_get for full details.
         const results = reranked.map(item => ({
             id: item.id,
             type: item.type,
             title: item.title,
-            snippet: generateSnippet(item.content, 150),
-
-            // SCORE BREAKDOWN - Enhanced with LAYER 3 temporal_type
-            final_score: Math.round((item.final_score || item.score) * 1000) / 1000,
-            score_breakdown: {
-                keyword: Math.round((item.keyword_score || item.score_breakdown?.keyword || 0) * 1000) / 1000,
-                vector: Math.round((item.vector_score || item.score_breakdown?.vector || 0) * 1000) / 1000,
-                recency: Math.round((item.recency_score || item.score_breakdown?.recency || 0) * 1000) / 1000,
-                verified_bonus: item.verified_bonus || item.score_breakdown?.verified_bonus || 0,
-                temporal_type: item.score_breakdown?.temporal_type || 'state'
-            },
-
-            status: item.status,
-            verified: !!item.verified,
-            confidence: item.confidence,
-            version: item.version,
-            provenance_summary: summarizeProvenance(item.provenance_json)
+            score: Math.round((item.final_score || item.score) * 1000) / 1000
         }));
 
         // Update last_used_at
@@ -197,18 +182,9 @@ export async function execute(params) {
 
         return {
             results,
-            related: allowRelations ? relatedResults : undefined,
-            excluded: excludedItems,
             meta: {
                 trace_id: traceId,
-                mode: searchMeta.mode,
-                requested_mode: searchMeta.requestedMode,
-                weights_used: searchMeta.weights,
-                fallback_reason: searchMeta.fallbackReason,
-                duration_ms: Date.now() - startTime,
-                relations_enabled: allowRelations,
-                relations_used: relationsUsed,
-                forensic: forensicMeta
+                count: results.length
             }
         };
 

@@ -26,7 +26,7 @@ export async function keywordSearch(params) {
         types = [],
         tags = [],
         excludeStatus = ['deleted'],
-        limit = 10
+        limit = 50
     } = params;
 
     const dbType = getDbType();

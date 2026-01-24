@@ -31,7 +31,7 @@ export async function hybridSearch(params) {
         types = [],
         tags = [],
         overrideQuarantine = false,
-        limit = 10
+        limit = 50
     } = params;
 
     const excludeStatus = overrideQuarantine

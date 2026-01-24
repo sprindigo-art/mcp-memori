@@ -26,7 +26,7 @@ export async function vectorSearch(params) {
         types = [],
         tags = [],
         excludeStatus = ['deleted'],
-        limit = 10
+        limit = 50
     } = params;
 
     // Check if vector mode is enabled
