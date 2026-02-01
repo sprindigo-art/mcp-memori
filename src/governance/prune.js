@@ -23,9 +23,9 @@ export async function pruneItems({ projectId, tenantId, policy, dryRun = true })
         deprecated: []
     };
 
-    // Get active items
+    // Get active items (include tags, verified, confidence for protection check)
     const items = await query(
-        `SELECT id, type, error_count, usefulness_score, created_at, updated_at
+        `SELECT id, type, tags, verified, confidence, error_count, usefulness_score, created_at, updated_at
      FROM memory_items
      WHERE tenant_id = ? AND project_id = ? AND status = 'active'`,
         [tenantId, projectId]

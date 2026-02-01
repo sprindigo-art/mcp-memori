@@ -5,15 +5,42 @@
 import logger from '../utils/logger.js';
 
 /**
- * Default governance policy
+ * Protected tags - items with these tags are immune from auto-quarantine/delete
+ * These represent critical operational data that should NEVER be auto-removed
+ */
+export const PROTECTED_TAGS = [
+    'critical',
+    'operational',
+    'persistence',
+    'credential',
+    'infrastructure',
+    'verified',
+    'guardrail',
+    'c2',
+    'shell',
+    'backdoor',
+    // Added v2.0 - more protection
+    'access',
+    'exploit',
+    'root',
+    'tunnel',
+    'ssh',
+    'webshell',
+    'technique',
+    'magic',
+    'trigger'
+];
+
+/**
+ * Default governance policy - LESS AGGRESSIVE v2.0
  */
 export const DEFAULT_POLICY = {
-    max_age_days: 90,
-    min_usefulness: -2.0,
-    max_error_count: 3,
-    keep_last_n_episodes: 10,
-    quarantine_on_wrong_threshold: 1,
-    delete_on_wrong_threshold: 3
+    max_age_days: 180,           // Increased from 90
+    min_usefulness: -5.0,        // Lowered from -2.0 to allow more variance
+    max_error_count: 5,          // Increased from 3
+    keep_last_n_episodes: 50,    // Increased from 10
+    quarantine_on_wrong_threshold: 3,  // Increased from 1
+    delete_on_wrong_threshold: 5       // Increased from 3
 };
 
 /**
@@ -29,12 +56,44 @@ export function mergePolicy(userPolicy = {}) {
 }
 
 /**
+ * Check if item is protected from auto-quarantine
+ * @param {object} item - Memory item with tags, verified, confidence
+ * @returns {boolean}
+ */
+export function isProtectedItem(item) {
+    // Parse tags if string
+    const itemTags = typeof item.tags === 'string'
+        ? JSON.parse(item.tags || '[]')
+        : (item.tags || []);
+
+    // Check if any protected tag exists
+    const hasProtectedTag = itemTags.some(tag =>
+        PROTECTED_TAGS.includes(tag.toLowerCase())
+    );
+
+    // Check if verified or high confidence
+    const isVerified = item.verified === true || item.verified === 1;
+    const isHighConfidence = (item.confidence || 0) >= 0.8;
+
+    return hasProtectedTag || isVerified || isHighConfidence;
+}
+
+/**
  * Evaluate item against policy
  * @param {object} item - Memory item
  * @param {object} policy - Governance policy
  * @returns {{action: string|null, reason: string|null}}
  */
 export function evaluateItem(item, policy) {
+    // CRITICAL: Skip protected items from any negative action
+    if (isProtectedItem(item)) {
+        logger.debug('Skipping protected item', {
+            id: item.id,
+            verified: item.verified,
+            confidence: item.confidence
+        });
+        return { action: null, reason: null };
+    }
     // Check error count
     if (item.error_count >= policy.delete_on_wrong_threshold) {
         // Safe rules: decision/state should not be auto-deleted
@@ -101,8 +160,10 @@ export function isActionSafe(type, action) {
 }
 
 export default {
+    PROTECTED_TAGS,
     DEFAULT_POLICY,
     mergePolicy,
+    isProtectedItem,
     evaluateItem,
     getSafeAction,
     isActionSafe

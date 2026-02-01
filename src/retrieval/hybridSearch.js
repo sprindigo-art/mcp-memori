@@ -153,7 +153,36 @@ function mergeResults(keywordResults, vectorResults) {
 }
 
 /**
- * Rank results with LAYER 1 weights and LAYER 3 temporal intelligence
+ * LAYER 4: Type Priority Boost
+ * Critical memory types get score boost to surface important items
+ */
+const TYPE_PRIORITY_BOOST = {
+    'runbook': 0.15,     // Highest - step-by-step procedures
+    'fact': 0.12,        // Credentials and critical data
+    'decision': 0.08,    // Important decisions
+    'state': 0.05,       // Current states
+    'episode': 0.0       // Lowest - activity logs
+};
+
+/**
+ * Check if item contains credentials (extra boost)
+ */
+function isCredentialItem(item) {
+    const content = (item.content || '').toLowerCase();
+    const title = (item.title || '').toLowerCase();
+    const combined = content + ' ' + title;
+
+    return combined.includes('password') ||
+        combined.includes('credential') ||
+        combined.includes('username') ||
+        combined.includes('ssh') ||
+        combined.includes('shell') ||
+        combined.includes('webshell') ||
+        combined.includes('backdoor');
+}
+
+/**
+ * Rank results with LAYER 1 weights, LAYER 3 temporal intelligence, and LAYER 4 type priority
  * @param {Array} results 
  * @param {object} weights - {keyword, vector, recency}
  * @returns {Array}
@@ -174,12 +203,20 @@ function rankResults(results, weights) {
         // Normalize keyword score (BM25 can be > 1)
         const normalizedKeyword = Math.min(1.0, (item.keyword_score || 0) / 20);
 
-        // LAYER 1: Apply configurable weights
+        // LAYER 4: Type priority boost (NEW)
+        const typePriority = TYPE_PRIORITY_BOOST[item.type] || 0;
+
+        // Extra boost for credential-related items
+        const credentialBoost = isCredentialItem(item) ? 0.1 : 0;
+
+        // LAYER 1: Apply configurable weights + LAYER 4: Type priority
         let finalScore = (
             weights.keyword * normalizedKeyword +
             weights.vector * (item.vector_score || 0) +
             weights.recency * recency +
-            verifiedBonus
+            verifiedBonus +
+            typePriority +
+            credentialBoost
         ) * deprecatedPenalty;
 
         // Cap at 1.0
@@ -194,7 +231,9 @@ function rankResults(results, weights) {
                 vector: item.vector_score || 0,
                 recency,
                 verified_bonus: verifiedBonus,
-                temporal_type: temporalType
+                temporal_type: temporalType,
+                type_priority: typePriority,
+                credential_boost: credentialBoost
             }
         };
     });

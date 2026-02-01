@@ -7,6 +7,7 @@ import { contentHash } from '../utils/hash.js';
 import { now, daysAgo } from '../utils/time.js';
 import { v4 as uuidv4 } from 'uuid';
 import logger from '../utils/logger.js';
+import { isProtectedItem } from './policyEngine.js';
 
 /**
  * Record a mistake
@@ -124,7 +125,18 @@ export async function checkLoopBreaker({ projectId, tenantId, threshold = 2, dry
             try {
                 const request = JSON.parse(audit.request_json);
                 if (request.id && !dryRun) {
-                    // Quarantine the related item
+                    // FIX: Check if item is protected before quarantining
+                    const item = await queryOne(
+                        `SELECT id, tags, verified, confidence FROM memory_items WHERE id = ?`,
+                        [request.id]
+                    );
+
+                    if (item && isProtectedItem(item)) {
+                        logger.debug('Skipping protected item in loopbreaker', { id: item.id });
+                        continue; // Don't quarantine protected items
+                    }
+
+                    // Quarantine the related item only if NOT protected
                     await query(
                         `UPDATE memory_items SET status = 'quarantined',
              status_reason = 'Loop breaker: related to repeated mistake',

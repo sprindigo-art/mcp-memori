@@ -44,6 +44,71 @@ export const definition = {
 import { getForensicMeta } from '../../utils/forensic.js';
 
 /**
+ * QUERY EXPANSION v1.0
+ * Expand search query with synonyms for better recall
+ * Focus on security/hacking domain terms
+ */
+const QUERY_SYNONYMS = {
+    // Tunneling & Pivoting
+    'chisel': ['tunnel', 'proxy', 'pivot', 'forward', 'socks'],
+    'tunnel': ['chisel', 'proxy', 'ssh tunnel', 'port forward', 'pivot'],
+    'pivot': ['tunnel', 'lateral', 'proxy', 'chisel'],
+
+    // Shells & Access
+    'webshell': ['backdoor', 'shell', 'rce', 'persistence', 'upload'],
+    'backdoor': ['webshell', 'persistence', 'trojan', 'implant'],
+    'shell': ['webshell', 'reverse shell', 'bind shell', 'terminal'],
+    'rce': ['remote code execution', 'command injection', 'webshell'],
+
+    // Credentials
+    'credential': ['password', 'username', 'login', 'auth', 'creds'],
+    'password': ['credential', 'pass', 'pwd', 'secret'],
+    'username': ['user', 'login', 'credential'],
+
+    // Vulnerabilities
+    'sqli': ['sql injection', 'database', 'injection'],
+    'xss': ['cross site scripting', 'script injection'],
+    'lfi': ['local file inclusion', 'file read', 'path traversal'],
+    'ssrf': ['server side request forgery', 'internal', 'fetch'],
+
+    // Recon
+    'recon': ['reconnaissance', 'scan', 'enumeration', 'discovery'],
+    'scan': ['nmap', 'port', 'recon', 'enumeration'],
+
+    // General
+    'exploit': ['vulnerability', 'payload', 'attack', 'hack'],
+    'vuln': ['vulnerability', 'exploit', 'weakness', 'flaw']
+};
+
+/**
+ * Expand query with synonyms
+ * @param {string} query - Original search query
+ * @returns {string} Expanded query
+ */
+function expandQuery(query) {
+    if (!query) return query;
+
+    const queryLower = query.toLowerCase();
+    const expandedTerms = new Set();
+
+    // Add original query terms
+    queryLower.split(/\s+/).forEach(term => expandedTerms.add(term));
+
+    // Check each synonym group
+    for (const [key, synonyms] of Object.entries(QUERY_SYNONYMS)) {
+        if (queryLower.includes(key)) {
+            // Add up to 3 most relevant synonyms
+            synonyms.slice(0, 3).forEach(syn => {
+                syn.split(/\s+/).forEach(word => expandedTerms.add(word));
+            });
+        }
+    }
+
+    // Return expanded query (original + synonyms)
+    return Array.from(expandedTerms).join(' ');
+}
+
+/**
  * Execute memory search
  * @param {object} params
  * @returns {Promise<object>}
@@ -63,10 +128,14 @@ export async function execute(params) {
         allow_relations: allowRelations = false
     } = params;
 
+    // QUERY EXPANSION: Expand query with synonyms for better recall
+    const expandedQuery = expandQuery(searchQuery);
+    const queryWasExpanded = expandedQuery !== searchQuery.toLowerCase();
+
     try {
-        // PERFORMA FILTERING (NORMAL SEARCH)
+        // PERFORMA FILTERING (NORMAL SEARCH) - Using expanded query for better recall
         const { results: rawResults, meta: searchMeta } = await hybridSearch({
-            query: searchQuery,
+            query: expandedQuery,
             projectId,
             tenantId,
             types,
@@ -81,7 +150,7 @@ export async function execute(params) {
             // Kita lakukan search terpisah KHUSUS untuk barang quarantined
             // agar bisa diekspos sebagai "Excluded" di metadata forensik
             const { results: hiddenResults } = await hybridSearch({
-                query: searchQuery,
+                query: expandedQuery,
                 projectId,
                 tenantId,
                 types,
