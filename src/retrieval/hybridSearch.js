@@ -157,10 +157,10 @@ function mergeResults(keywordResults, vectorResults) {
  * Critical memory types get score boost to surface important items
  */
 const TYPE_PRIORITY_BOOST = {
-    'runbook': 0.15,     // Highest - step-by-step procedures
-    'fact': 0.12,        // Credentials and critical data
-    'decision': 0.08,    // Important decisions
-    'state': 0.05,       // Current states
+    'runbook': 0.08,     // Highest - step-by-step procedures (reduced from 0.15)
+    'fact': 0.06,        // Credentials and critical data (reduced from 0.12)
+    'decision': 0.04,    // Important decisions (reduced from 0.08)
+    'state': 0.02,       // Current states (reduced from 0.05)
     'episode': 0.0       // Lowest - activity logs
 };
 
@@ -195,19 +195,19 @@ function rankResults(results, weights) {
         const recency = recencyScore(timestamp, temporalType);
 
         // Verified bonus
-        const verifiedBonus = item.verified ? 0.1 : 0;
+        const verifiedBonus = item.verified ? 0.05 : 0;
 
         // Deprecated penalty
         const deprecatedPenalty = item.status === 'deprecated' ? 0.7 : 1.0;
 
         // Normalize keyword score (BM25 can be > 1)
-        const normalizedKeyword = Math.min(1.0, (item.keyword_score || 0) / 20);
+        const normalizedKeyword = Math.min(1.0, (item.keyword_score || 0) / 30);
 
         // LAYER 4: Type priority boost (NEW)
         const typePriority = TYPE_PRIORITY_BOOST[item.type] || 0;
 
         // Extra boost for credential-related items
-        const credentialBoost = isCredentialItem(item) ? 0.1 : 0;
+        const credentialBoost = isCredentialItem(item) ? 0.05 : 0;
 
         // LAYER 1: Apply configurable weights + LAYER 4: Type priority
         let finalScore = (
@@ -219,8 +219,8 @@ function rankResults(results, weights) {
             credentialBoost
         ) * deprecatedPenalty;
 
-        // Cap at 1.0
-        finalScore = Math.min(1.0, finalScore);
+        // No hard cap - allow natural score differentiation for better ranking
+        // Scores > 1.0 indicate very strong multi-signal matches
 
         return {
             ...item,

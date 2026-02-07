@@ -3,7 +3,7 @@
  * @module governance/prune
  */
 import { query, transaction } from '../db/index.js';
-import { evaluateItem, getSafeAction } from './policyEngine.js';
+import { evaluateItem, getSafeAction, isProtectedItem } from './policyEngine.js';
 import { now } from '../utils/time.js';
 import logger from '../utils/logger.js';
 
@@ -139,24 +139,30 @@ export async function pruneItems({ projectId, tenantId, policy, dryRun = true })
  * @param {boolean} params.dryRun
  * @returns {Promise<{pruned: string[]}>}
  */
-export async function pruneOldEpisodes({ projectId, tenantId, keepLastN = 10, dryRun = true }) {
+export async function pruneOldEpisodes({ projectId, tenantId, keepLastN = 500, dryRun = true }) {
     const result = { pruned: [] };
 
     // Get episodes ordered by creation date
     const episodes = await query(
-        `SELECT id FROM memory_items
+        `SELECT id, tags, verified, confidence FROM memory_items
      WHERE tenant_id = ? AND project_id = ? AND type = 'episode' 
      AND status = 'active'
      ORDER BY created_at DESC`,
         [tenantId, projectId]
     );
 
-    // Episodes to prune (all after keepLastN)
-    const toPrune = episodes.slice(keepLastN);
+    // Episodes beyond keepLastN (candidates for pruning)
+    const candidates = episodes.slice(keepLastN);
 
-    if (toPrune.length === 0) return result;
+    if (candidates.length === 0) return result;
 
-    for (const episode of toPrune) {
+    for (const episode of candidates) {
+        // CRITICAL: Skip protected items (with critical tags, verified, high confidence)
+        if (isProtectedItem(episode)) {
+            logger.debug('Skipping protected episode from pruning', { id: episode.id });
+            continue;
+        }
+
         if (!dryRun) {
             await query(
                 `UPDATE memory_items SET status = 'deleted', 

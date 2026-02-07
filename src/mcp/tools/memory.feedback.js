@@ -77,8 +77,9 @@ export async function execute(params) {
                 newErrorCount += 1;
                 newVerified = 0;
 
-                // Quarantine if error count reaches threshold
-                if (newErrorCount >= 1) {
+                // Quarantine if error count reaches policy threshold (NOT on first wrong!)
+                const QUARANTINE_THRESHOLD = 3; // Must match DEFAULT_POLICY.quarantine_on_wrong_threshold
+                if (newErrorCount >= QUARANTINE_THRESHOLD) {
                     newStatus = 'quarantined';
                 }
 

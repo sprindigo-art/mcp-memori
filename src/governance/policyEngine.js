@@ -38,7 +38,7 @@ export const DEFAULT_POLICY = {
     max_age_days: 180,           // Increased from 90
     min_usefulness: -5.0,        // Lowered from -2.0 to allow more variance
     max_error_count: 5,          // Increased from 3
-    keep_last_n_episodes: 50,    // Increased from 10
+    keep_last_n_episodes: 500,    // Increased from 50 to protect operational history
     quarantine_on_wrong_threshold: 3,  // Increased from 1
     delete_on_wrong_threshold: 5       // Increased from 3
 };
@@ -110,8 +110,12 @@ export function evaluateItem(item, policy) {
         return { action: 'quarantined', reason: `Error count ${item.error_count} >= quarantine threshold` };
     }
 
-    // Check usefulness
-    if (item.usefulness_score < policy.min_usefulness) {
+    // Check usefulness - ONLY quarantine items with NEGATIVE scores (actively downvoted)
+    // Score 0 means "no feedback yet", NOT "useless" - these must be PROTECTED
+    const hasNegativeFeedback = item.usefulness_score < 0;
+    const belowThreshold = item.usefulness_score < policy.min_usefulness;
+
+    if (hasNegativeFeedback && belowThreshold) {
         if (item.type === 'decision' || item.type === 'state') {
             return { action: 'deprecated', reason: `Low usefulness score ${item.usefulness_score}` };
         }

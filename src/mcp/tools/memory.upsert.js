@@ -298,6 +298,125 @@ async function upsertItem(item, tenantId, traceId) {
                 };
             }
 
+            // TITLE-BASED MATCHING: Update existing item when title+type+project matches
+            // This allows content updates for existing memory items (fixes version = 1 forever bug)
+            const titleMatch = await queryOne(
+                `SELECT id, version, content_hash, tags FROM memory_items 
+                 WHERE title = ? COLLATE NOCASE AND type = ? AND project_id = ? AND tenant_id = ?
+                 AND status = 'active'
+                 ORDER BY updated_at DESC LIMIT 1`,
+                [item.title, item.type, projectId, tenantId]
+            );
+
+            if (titleMatch) {
+                // Regenerate embedding for new content
+                let newEmbedding = null;
+                try {
+                    if (await isEmbeddingAvailable()) {
+                        const textToEmbed = `${item.title} ${item.content}`;
+                        const embResult = await generateEmbedding(textToEmbed);
+                        if (embResult?.embedding) {
+                            newEmbedding = embResult.embedding;
+                        }
+                    }
+                } catch (err) {
+                    logger.warn('Embedding regeneration failed on content update', { error: err.message });
+                }
+
+                // MERGE TAGS: Preserve protected tags from old item
+                const oldTags = typeof titleMatch.tags === 'string'
+                    ? JSON.parse(titleMatch.tags || '[]')
+                    : (titleMatch.tags || []);
+                const newTags = normalizeTags(item.tags);
+                const PROTECTED_TAG_LIST = [
+                    'critical', 'operational', 'persistence', 'credential',
+                    'infrastructure', 'verified', 'access', 'exploit',
+                    'root', 'tunnel', 'ssh', 'webshell', 'technique', 'shell', 'backdoor'
+                ];
+                const protectedFromOld = oldTags.filter(t =>
+                    PROTECTED_TAG_LIST.includes(t.toLowerCase()) && !newTags.includes(t)
+                );
+                const mergedTags = [...newTags, ...protectedFromOld];
+
+                // Build dynamic update - only update embedding if we generated a new one
+                const updateFields = [
+                    'content = ?', 'content_hash = ?', 'tags = ?',
+                    'verified = ?', 'confidence = ?', 'provenance_json = ?',
+                    'version = version + 1', 'updated_at = ?'
+                ];
+                const updateValues = [
+                    item.content, hash,
+                    JSON.stringify(mergedTags),
+                    item.verified ? 1 : 0,
+                    item.confidence || 0.5,
+                    JSON.stringify(item.provenance_json || {}),
+                    now()
+                ];
+
+                if (newEmbedding) {
+                    updateFields.push('embedding = ?');
+                    updateValues.push(JSON.stringify(newEmbedding));
+                }
+
+                updateValues.push(titleMatch.id); // for WHERE clause
+
+                await query(
+                    `UPDATE memory_items SET ${updateFields.join(', ')} WHERE id = ?`,
+                    updateValues
+                );
+
+                // RE-RUN AUTO-LINKING: Refresh knowledge graph for updated content
+                try {
+                    const suggestions = await suggestRelations(titleMatch.id, projectId, tenantId);
+                    let linksRefreshed = 0;
+                    for (const suggestion of suggestions.slice(0, 3)) {
+                        if (suggestion.confidence >= 0.4) {
+                            try {
+                                await addRelation({
+                                    fromId: titleMatch.id,
+                                    toId: suggestion.toId,
+                                    relation: suggestion.suggestedRelation,
+                                    weight: suggestion.confidence,
+                                    metadata: { auto_created: true, source: 'content_update_relink' }
+                                });
+                                linksRefreshed++;
+                            } catch (linkErr) {
+                                logger.debug('Re-link failed', { error: linkErr.message });
+                            }
+                        }
+                    }
+                    if (linksRefreshed > 0) {
+                        logger.info('Knowledge graph refreshed after content update', {
+                            id: titleMatch.id, links_refreshed: linksRefreshed
+                        });
+                    }
+                } catch (autoLinkErr) {
+                    logger.debug('Auto-relinking skipped', { error: autoLinkErr.message });
+                }
+
+                const updated = await queryOne(
+                    `SELECT version, status FROM memory_items WHERE id = ?`,
+                    [titleMatch.id]
+                );
+
+                logger.info('Title-based content update', {
+                    id: titleMatch.id,
+                    title: item.title,
+                    old_version: titleMatch.version,
+                    new_version: updated.version,
+                    tags_merged: protectedFromOld.length > 0,
+                    trace_id: traceId
+                });
+
+                return {
+                    id: titleMatch.id,
+                    version: updated.version,
+                    status: updated.status,
+                    action: 'content_updated',
+                    previous_content_hash: titleMatch.content_hash
+                };
+            }
+
             // Insert new item
             const id = uuidv4();
 

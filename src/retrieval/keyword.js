@@ -143,7 +143,6 @@ async function sqliteSearch({ keywords, projectId, tenantId, types, tags, exclud
             status: row.status,
             verified: row.verified,
             confidence: row.confidence,
-            confidence: row.confidence,
             version: row.version,
             created_at: row.created_at,
             updated_at: row.updated_at

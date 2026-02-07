@@ -57,7 +57,7 @@ export function rerank(results, query, options = {}) {
 
         return {
             ...result,
-            score: Math.min(1.0, score) // Cap at 1.0
+            score // Natural score for better ranking differentiation
         };
     });
 
