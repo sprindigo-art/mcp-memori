@@ -1,5 +1,6 @@
 /**
  * memory.forget - Soft delete memory items
+ * v4.0 - Cache invalidation on delete
  * @module mcp/tools/memory.forget
  */
 import { query, queryOne } from '../../db/index.js';
@@ -7,7 +8,8 @@ import { withLock } from '../../concurrency/lock.js';
 import { now, daysAgo } from '../../utils/time.js';
 import { v4 as uuidv4 } from 'uuid';
 import logger from '../../utils/logger.js';
-import { getForensicMeta } from '../../utils/forensic.js';
+import { getMinimalForensicMeta } from '../../utils/forensic.js';
+import { invalidateCache } from '../../utils/cache.js';
 
 /**
  * Tool definition for MCP
@@ -75,8 +77,8 @@ export async function execute(params) {
             tenantId
         );
 
-        // Build Forensic Metadata
-        const forensicMeta = await getForensicMeta(tenantId, projectId || 'unknown');
+        // Build Minimal Forensic Metadata
+        const forensicMeta = getMinimalForensicMeta(tenantId, projectId || 'unknown');
 
         return {
             ok: true,
@@ -120,6 +122,9 @@ async function forgetById(id, reason, tenantId) {
        WHERE id = ?`,
             [reason, now(), id]
         );
+
+        // Invalidate cache on delete
+        invalidateCache(id);
 
         return [id];
     });

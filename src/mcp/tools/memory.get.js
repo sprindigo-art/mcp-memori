@@ -1,5 +1,6 @@
 /**
- * memory.get - Get single memory item
+ * memory.get - Get single memory item with LRU caching
+ * v4.0 - Server-side cache for reduced DB I/O
  * @module mcp/tools/memory.get
  */
 import { queryOne, query } from '../../db/index.js';
@@ -7,6 +8,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { now } from '../../utils/time.js';
 import logger from '../../utils/logger.js';
 import { getForensicMeta } from '../../utils/forensic.js';
+import { getFromCache, setToCache } from '../../utils/cache.js';
 
 /**
  * Tool definition for MCP
@@ -33,11 +35,26 @@ export async function execute(params) {
     const { id } = params;
 
     try {
-        // Get the item
-        const item = await queryOne(
-            `SELECT * FROM memory_items WHERE id = ?`,
-            [id]
-        );
+        // CHECK CACHE FIRST (v4.0)
+        const cachedItem = getFromCache(id);
+        let item;
+        let cacheHit = false;
+
+        if (cachedItem) {
+            item = cachedItem;
+            cacheHit = true;
+        } else {
+            // Cache miss - fetch from DB
+            item = await queryOne(
+                `SELECT * FROM memory_items WHERE id = ?`,
+                [id]
+            );
+
+            // Store in cache for future requests
+            if (item) {
+                setToCache(id, item);
+            }
+        }
 
         if (!item) {
             return {
@@ -64,11 +81,16 @@ export async function execute(params) {
             [id, id]
         );
 
-        // Update last_used_at
+        // Update last_used_at AND auto-increment usefulness_score (true interest signal)
+        // +0.01 per get (gradual), cap at 5.0 (max multiplier: 1.36x in ranking)
         await query(
-            `UPDATE memory_items SET last_used_at = ? WHERE id = ?`,
+            `UPDATE memory_items SET last_used_at = ?, usefulness_score = MIN(5.0, usefulness_score + 0.01) WHERE id = ?`,
             [now(), id]
         );
+
+        // Invalidate cache since score changed
+        const { invalidateCache } = await import('../../utils/cache.js');
+        invalidateCache(id);
 
         // Write audit log
         await writeAuditLog(traceId, 'memory_get', { id }, {

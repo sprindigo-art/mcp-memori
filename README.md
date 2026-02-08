@@ -1,62 +1,265 @@
-# MCP Memory Server v2.0
+# MCP Memory Server v5.0
 
-Production-grade MCP Memory Server untuk agent AI dengan kemampuan:
-- **Ingat lintas sesi** (persisten SQLite/PostgreSQL)
-- **Tidak mengulang dari nol** (state preservation)
-- **Recall akurat** (hybrid search: keyword + vector + recency)
-- **Self-healing** (auto-quarantine memori buruk)
-- **Loop breaker** (deteksi dan cegah kesalahan berulang)
-- **Concurrency-safe** (3 AI bisa berjalan bersamaan)
-- **Tanpa API key** (embedding lokal via ollama, atau keyword-only)
+Production-grade MCP Memory Server untuk agent AI — **OTAK UTAMA** sistem Janda AI.
+
+**Status:** Production (Feb 2026) | **Items:** 1,973 active | **Links:** 1,315 | **Guardrails:** 17 active
+
+## Kemampuan Utama
+- **Ingat lintas sesi** — persisten SQLite (PostgreSQL supported)
+- **Hybrid search** — keyword + vector (sentence-transformers lokal) + recency
+- **Self-healing** — auto-quarantine memori buruk, loop breaker
+- **Guardrails aktif** — blokir teknik yang sudah gagal, cegah kesalahan berulang
+- **Metacognition** — refleksi pola kegagalan/keberhasilan
+- **LRU Cache** — response <20ms untuk items yang sering diakses
+- **Concurrency-safe** — multi-agent bisa berjalan bersamaan
+- **Tanpa API key** — embedding lokal via @xenova/transformers (384-dim)
 
 ---
 
-## 🚀 v2.0 ENHANCEMENTS - 5 LAYERS
+## Arsitektur
 
-### LAYER 1: Semantic Power (Configurable Hybrid Search)
-- `EMBEDDING_MODE`: `keyword_only` | `hybrid` | `vector_only`
-- Default tetap `keyword_only` untuk stabilitas dan determinisme
-- Configurable score weights per mode
-- Auto-fallback ke keyword_only jika vector gagal
-
-**Score Formula:**
-```javascript
-// keyword_only (default, deterministic)
-score = keyword * 0.75 + recency * 0.25
-
-// hybrid (balanced)
-score = keyword * 0.5 + vector * 0.3 + recency * 0.2
-
-// vector_only (semantic focus)
-score = vector * 0.8 + recency * 0.2
+```
+┌─────────────────────────────────────────────┐
+│              MCP Memory v5.0                │
+├──────────┬──────────┬───────────────────────┤
+│  9 Tools │ 5 Layers │ 37 Source Files       │
+├──────────┴──────────┴───────────────────────┤
+│                                             │
+│  ┌─────────┐  ┌──────────┐  ┌───────────┐  │
+│  │ Search  │  │  Upsert  │  │  Reflect  │  │
+│  │ hybrid  │  │ idempot. │  │ metacog.  │  │
+│  └────┬────┘  └────┬─────┘  └─────┬─────┘  │
+│       │            │              │         │
+│  ┌────▼────────────▼──────────────▼─────┐   │
+│  │         SQLite (memory.db)           │   │
+│  │  Items: 1,973 | Links: 1,315         │   │
+│  │  Embeddings: 384-dim local           │   │
+│  │  Audit: 10,162 entries               │   │
+│  └──────────────────────────────────────┘   │
+│                                             │
+│  ┌───────────┐  ┌──────────┐  ┌─────────┐  │
+│  │ Guardrails│  │ Governor │  │  Cache   │  │
+│  │ 17 active │  │ forensic │  │ LRU 200 │  │
+│  └───────────┘  └──────────┘  └─────────┘  │
+└─────────────────────────────────────────────┘
 ```
 
-### LAYER 2: Lightweight Knowledge Graph
+---
+
+## 5 Layers
+
+### Layer 1: Semantic Power (Hybrid Search)
+Tiga mode pencarian yang bisa dikonfigurasi:
+
+| Mode | Formula | Use Case |
+|------|---------|----------|
+| `keyword_only` | keyword×0.75 + recency×0.25 | Deterministic, low latency |
+| **`hybrid`** (default) | keyword×0.5 + vector×0.3 + recency×0.2 | **Balanced, recommended** |
+| `vector_only` | vector×0.8 + recency×0.2 | Semantic-only |
+
+**Embedding Backend:** `@xenova/transformers` (all-MiniLM-L6-v2, 384-dim)
+- Lokal, tanpa API key, tanpa Ollama dependency
+- Auto-fallback ke keyword_only jika embedding gagal
+
+### Layer 2: Knowledge Graph
 - Relasi antar memori: `causes`, `depends_on`, `contradicts`, `supersedes`, `related_to`
 - Multi-hop traversal untuk context enrichment
-- Digunakan saat summarize, conflict detection, dan loop breaker
+- 1,315 links aktif di database
 
-### LAYER 3: Temporal Intelligence
-- `temporal_type`: `event` | `state` | `rule` | `preference`
-- Decay berbeda per tipe:
-  - `event`: decay cepat (0.15) - events become old quickly
-  - `state`: decay normal (0.1)
-  - `rule`: decay lambat (0.03) - rules persist
-  - `preference`: decay sangat lambat (0.02) - preferences almost permanent
+### Layer 3: Temporal Intelligence
+| Type | Decay Rate | Behavior |
+|------|-----------|----------|
+| `event` | 0.15 (cepat) | Episode/log cepat usang |
+| `state` | 0.10 (normal) | Status project |
+| `rule` | 0.03 (lambat) | Decision/runbook bertahan lama |
+| `preference` | 0.02 (sangat lambat) | Preferensi hampir permanen |
 
-### LAYER 4: Intelligence Governance
-- **Guardrails Manager**: Explicit guardrail untuk blocking/suppressing
-- **Auto-guardrail**: Dari repeated mistakes
-- `meta.forensic.governance_state` di setiap response:
-  - `quarantined_count`, `quarantined_ids`
-  - `deleted_count`, `recent_deleted_ids`
-  - `guardrails_active`
-  - `suppressed_memory_ids`
+### Layer 4: Intelligence Governance
+- **Guardrails Manager:** blokir/suppress memori berbahaya
+- **Auto-guardrail:** dari repeated mistakes (17 rules aktif)
+- **Forensic metadata** di setiap response: quarantine count, deleted count, guardrails active
+- **Smart scoring:** usefulness_score berbasis success/failure flag
 
-### LAYER 5: Cross-Model Intelligence
+### Layer 5: Cross-Model Intelligence
 - Provenance tracking: `model_id`, `persona`, `confidence`, `session_id`
 - Conflict detection antar model
-- `meta.forensic.cross_model` summary
+- 12 model terdeteksi, 0 konflik aktif
+
+---
+
+## 9 Tools
+
+### 1. `memory_search`
+Cari memori dengan hybrid search (vector + keyword + recency).
+
+```json
+{
+  "query": "target SQLi exploit",
+  "project_id": "janda_workspace",
+  "types": ["fact", "episode"],
+  "tags": ["credential"],
+  "required_tags": ["critical"],
+  "limit": 10,
+  "allow_relations": false,
+  "override_quarantine": false
+}
+```
+
+### 2. `memory_get`
+Ambil detail lengkap satu memori berdasarkan ID. Includes linked items.
+
+```json
+{
+  "id": "uuid-here"
+}
+```
+
+### 3. `memory_upsert`
+Simpan atau update memori (idempotent, concurrency-safe).
+
+```json
+{
+  "items": [{
+    "type": "episode",
+    "project_id": "janda_workspace",
+    "title": "[FAILED] SQLi at /login endpoint",
+    "content": "Command: sqlmap -u target/login\n## OUTCOME: WAF blocked",
+    "tags": ["guardrail", "banned"],
+    "success": false,
+    "verified": true,
+    "confidence": 0.9
+  }]
+}
+```
+
+**Fitur upsert:**
+- Title match → update existing (idempotent)
+- Content hash → skip jika identik
+- Front-loading embedding: `TITLE | TAGS | OUTCOME | CMD | content`
+- Score otomatis: `success:true` = +1.0, `success:false` = -0.5
+- Format validation: Episode WAJIB punya `Command:` + `## OUTCOME`
+- Auto-link ke items terkait
+- Maintenance counter: warning setiap 20 upserts
+
+### 4. `memory_forget`
+Soft-delete memori dengan alasan. Support bulk delete via selector.
+
+```json
+{
+  "id": "uuid-here",
+  "reason": "Outdated credential"
+}
+```
+
+### 5. `memory_summarize`
+Ringkasan project: state terkini, keputusan, runbooks, guardrails.
+
+```json
+{
+  "project_id": "janda_workspace",
+  "compact": true
+}
+```
+
+### 6. `memory_feedback`
+Beri feedback pada memori (useful/not_relevant/wrong).
+
+```json
+{
+  "id": "uuid-here",
+  "label": "useful",
+  "notes": "Credential masih valid"
+}
+```
+
+### 7. `memory_maintain`
+Maintenance komprehensif: dedup, conflict, prune, compact, loopbreak, clean_links, auto_guardrails, archive, consolidate.
+
+```json
+{
+  "project_id": "janda_workspace",
+  "mode": "apply",
+  "actions": ["auto_guardrails", "clean_links", "consolidate"]
+}
+```
+
+**Maintenance actions:**
+| Action | Fungsi |
+|--------|--------|
+| `dedup` | Hapus duplikat (cosine similarity) |
+| `conflict` | Deteksi memori yang saling bertentangan |
+| `prune` | Hapus memori usang/berkualitas rendah |
+| `compact` | Optimasi database |
+| `loopbreak` | Deteksi dan cegah loop kesalahan |
+| `clean_links` | Bersihkan links yang orphan |
+| `auto_guardrails` | Generate guardrails dari pola kegagalan |
+| `archive` | Arsipkan items >180 hari |
+| `consolidate` | Gabungkan episodes serupa (cosine >0.85) |
+
+### 8. `memory_stats`
+Statistik lengkap: total items, breakdown per type/status, health check, guardrails, format compliance, database info.
+
+```json
+{
+  "project_id": "janda_workspace",
+  "sections": ["counts", "health", "guardrails", "audit"]
+}
+```
+
+### 9. `memory_reflect`
+Analisis pola kegagalan/keberhasilan (metacognition). Returns structured stats untuk LLM reasoning.
+
+```json
+{
+  "project_id": "janda_workspace",
+  "lookback_count": 20,
+  "filter_tags": ["hacking"]
+}
+```
+
+---
+
+## Memory Types
+
+| Type | Deskripsi | Temporal Type | Score Base |
+|------|-----------|---------------|-----------|
+| `fact` | Fakta/informasi/credential | state | 0.5 |
+| `state` | Status terkini project/target | state | 0.5 |
+| `decision` | Keputusan arsitektur/teknis | rule | 0.2 |
+| `runbook` | How-to/prosedur step-by-step | rule | 0.5 |
+| `episode` | Log aksi teknis (Command + Outcome) | event | 0.2 |
+
+**Score modifiers:**
+- `success: true` → base + 1.0
+- `success: false` → base - 0.5
+- `tags: ["credential"]` → +1.5
+- `verified: true` → +0.1 bonus di search
+
+## Status Flow
+
+```
+active → quarantined → deleted
+       ↘ deprecated ↗
+```
+
+- **active**: Normal, searchable
+- **quarantined**: Error >= threshold, hidden dari search (kecuali `override_quarantine: true`)
+- **deprecated**: Superseded oleh item baru, score penalty 0.7×
+- **deleted**: Soft-deleted, never returned
+
+---
+
+## Format Wajib (Writeback)
+
+| Type | Format Required | Contoh |
+|------|----------------|--------|
+| episode | `Command:` + `## OUTCOME` | `Command: nmap -sV target\n## OUTCOME: Ports 80,443 open` |
+| runbook | `## STEP 1` + `Command:` | `## STEP 1\nCommand: ssh root@vps` |
+| fact | `## HOW TO USE` + `Command:` | `## HOW TO USE\nCommand: curl -k https://target` |
+| decision | Bebas | Keputusan arsitektur |
+| state | Bebas | Status terkini |
+
+**Hard block:** Episode tanpa `Command:` + `## OUTCOME` akan ditolak.
 
 ---
 
@@ -68,238 +271,123 @@ npm install
 
 # 2. Setup environment
 cp .env.example .env
+# Edit: SQLITE_PATH, EMBEDDING_MODE=hybrid, EMBEDDING_BACKEND=local
 
-# 3. Migrate database
-npm run db:migrate
-
-# 4. Apply v2.0 schema upgrade
-sqlite3 data/memory.db < src/db/schema.upgrade.sql
-
-# 5. Run tests
-npm test
-node scripts/test_layers.cjs  # Test 5 layers
-
-# 6. Start server
+# 3. Start server
 npm start
 ```
 
-## 7 Tools
-
-### 1. memory_search
-Cari memori dengan hybrid search (vector + keyword + recency).
-
-```json
-{
-  "query": "database architecture",
-  "project_id": "my-project",
-  "types": ["decision", "fact"],
-  "tags": ["architecture"],
-  "limit": 10,
-  "override_quarantine": false
-}
-```
-
-**Response v2.0:**
-```json
-{
-  "results": [{
-    "id": "uuid",
-    "type": "decision",
-    "title": "Use PostgreSQL",
-    "snippet": "Decided to use PostgreSQL...",
-    "final_score": 0.85,
-    "score_breakdown": {
-      "keyword": 0.7,
-      "vector": 0,
-      "recency": 0.8,
-      "verified_bonus": 0.1,
-      "temporal_type": "rule"
-    },
-    "status": "active",
-    "verified": true,
-    "confidence": 0.9,
-    "version": 2
-  }],
-  "excluded": [{
-    "id": "bad-uuid",
-    "title": "Outdated",
-    "reason": "quarantined"
-  }],
-  "meta": {
-    "trace_id": "uuid",
-    "mode": "keyword_only",
-    "weights_used": {"keyword": 0.75, "vector": 0, "recency": 0.25},
-    "forensic": {
-      "db_backend": "sqlite",
-      "embedding_mode": "keyword_only",
-      "score_weights": {...},
-      "temporal_config": {...},
-      "governance_state": {
-        "quarantined_count": 1,
-        "guardrails_active": [],
-        "suppressed_memory_ids": []
-      },
-      "cross_model": {
-        "models_detected": ["claude", "gpt-4"],
-        "pending_conflicts": 0
-      }
-    }
-  }
-}
-```
-
-### 2. memory_get
-Ambil detail lengkap satu memori.
-
-```json
-{
-  "id": "memory-uuid"
-}
-```
-
-### 3. memory_upsert
-Simpan atau update memori (idempotent).
-
-```json
-{
-  "items": [{
-    "type": "decision",
-    "project_id": "my-project",
-    "title": "Use Docker",
-    "content": "Decided to containerize with Docker for consistency.",
-    "tags": ["devops", "docker", "user_preference"],
-    "verified": true,
-    "confidence": 0.9,
-    "provenance_json": {
-      "model_id": "claude-3",
-      "persona": "architect",
-      "session_id": "abc123"
-    }
-  }]
-}
-```
-
-### 4. memory_forget
-Soft-delete memori.
-
-```json
-{
-  "id": "memory-uuid",
-  "reason": "Outdated information"
-}
-```
-
-### 5. memory_summarize
-Ringkasan project dengan user_preferences.
-
-```json
-{
-  "project_id": "my-project"
-}
-```
-
-**Response includes:**
-- `state_latest`
-- `key_decisions`
-- `runbooks_top`
-- `user_preferences` (items dengan tag `user_preference`)
-- `guardrails` (active peringatan)
-- `excluded_items` (quarantined dengan alasan)
-
-### 6. memory_feedback
-Beri feedback pada memori.
-
-```json
-{
-  "id": "memory-uuid",
-  "label": "useful|not_relevant|wrong",
-  "notes": "Optional explanation"
-}
-```
-
-### 7. memory_maintain
-Maintenance komprehensif.
-
-```json
-{
-  "project_id": "my-project",
-  "mode": "dry_run|apply",
-  "actions": ["dedup", "conflict", "prune", "compact", "loopbreak"],
-  "policy": {
-    "max_age_days": 90,
-    "min_usefulness": -2.0,
-    "max_error_count": 3,
-    "keep_last_n_episodes": 10,
-    "quarantine_on_wrong_threshold": 1,
-    "delete_on_wrong_threshold": 3
-  }
-}
-```
-
-## Memory Types
-
-| Type | Description | Temporal Type | Safe Delete |
-|------|-------------|---------------|-------------|
-| `fact` | Fakta/informasi | state | ✓ |
-| `fact` + tag `user_preference` | Preferensi user | preference | ✓ |
-| `state` | Status terkini project | state | ✗ (supersede) |
-| `decision` | Keputusan arsitektur/teknis | rule | ✗ (deprecated) |
-| `runbook` | How-to/prosedur | rule | ✓ |
-| `episode` | Log sesi/aktivitas | event | ✓ |
-
-## Status Flow
-
-```
-active → quarantined → deleted
-       ↘ deprecated ↗
-```
-
-- **active**: Normal, searchable
-- **quarantined**: Error >= threshold, hidden dari search (kecuali override)
-- **deprecated**: Superseded, score penalty 0.7x
-- **deleted**: Soft-deleted, never returned
-
-## Environment Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `POSTGRES_URL` | - | PostgreSQL connection string |
-| `SQLITE_PATH` | `./data/memory.db` | SQLite database path |
-| `EMBEDDING_MODE` | `keyword_only` | `keyword_only`, `hybrid`, atau `vector_only` |
-| `OLLAMA_URL` | `http://localhost:11434` | Ollama endpoint |
-| `OLLAMA_MODEL` | `nomic-embed-text` | Embedding model |
-| `LOG_LEVEL` | `info` | `error`, `warn`, `info`, `debug` |
-
-## Keunggulan vs Sistem AI Memory Lain
-
-| Feature | MCP Memory v2.0 | Mem0 | Zep | MemGPT |
-|---------|-----------------|------|-----|--------|
-| Self-Healing | ✅ Auto quarantine + delete | ❌ | ❌ | ❌ |
-| Loop Breaker | ✅ Guardrails injection | ❌ | ❌ | ❌ |
-| Forensic Audit | ✅ meta.forensic setiap response | ⚠️ Partial | ⚠️ Partial | ❌ |
-| Temporal Intelligence | ✅ Type-based decay | ⚠️ Partial | ✅ Excellent | ⚠️ Limited |
-| Cross-Model | ✅ Conflict detection | ❌ | ❌ | ❌ |
-| Latency | ✅ 7-20ms | 1.4s p95 | Low | High |
-| Determinism | ✅ Keyword-only default | ❌ | ❌ | ❌ |
-
 ## MCP Configuration
-
-Add to your MCP config:
 
 ```json
 {
   "mcpServers": {
     "mcp-memori": {
       "command": "node",
-      "args": ["/path/to/mcp-memori/src/server.js"],
+      "args": ["/home/kali/Desktop/mcp-memori/src/server.js"],
       "env": {
-        "SQLITE_PATH": "/path/to/memory.db",
-        "EMBEDDING_MODE": "keyword_only"
+        "NODE_ENV": "production",
+        "SQLITE_PATH": "/home/kali/Desktop/mcp-memori/data/memory.db",
+        "EMBEDDING_MODE": "hybrid",
+        "EMBEDDING_BACKEND": "local",
+        "LOG_LEVEL": "info"
       }
     }
   }
 }
 ```
+
+## Environment Variables
+
+| Variable | Default | Deskripsi |
+|----------|---------|-----------|
+| `SQLITE_PATH` | `./data/memory.db` | SQLite database path |
+| `EMBEDDING_MODE` | `hybrid` | `keyword_only`, `hybrid`, `vector_only` |
+| `EMBEDDING_BACKEND` | `local` | `local` (sentence-transformers), `ollama`, `off` |
+| `OLLAMA_URL` | `http://localhost:11434` | Ollama endpoint (jika backend=ollama) |
+| `OLLAMA_MODEL` | `nomic-embed-text` | Ollama model |
+| `LOG_LEVEL` | `info` | `error`, `warn`, `info`, `debug` |
+| `DEFAULT_TENANT` | `local-user` | Default tenant ID |
+| `DEFAULT_PROJECT` | `antigravity` | Default project ID |
+
+## Scripts
+
+```bash
+# Re-index semua embeddings (setelah upgrade model)
+node scripts/reindex-embeddings.js
+
+# Database backup
+cp data/memory.db data/memory.db.backup.$(date +%Y%m%d)
+```
+
+## Project Structure
+
+```
+mcp-memori/
+├── src/
+│   ├── server.js              # MCP stdio server
+│   ├── mcp/
+│   │   ├── index.js           # Tool registry (9 tools)
+│   │   └── tools/             # Tool implementations
+│   │       ├── memory.search.js
+│   │       ├── memory.get.js
+│   │       ├── memory.upsert.js
+│   │       ├── memory.forget.js
+│   │       ├── memory.summarize.js
+│   │       ├── memory.feedback.js
+│   │       ├── memory.maintain.js
+│   │       ├── memory.stats.js
+│   │       └── memory.reflect.js
+│   ├── retrieval/             # Search engine
+│   │   └── hybridSearch.js    # Keyword + vector + recency
+│   ├── governance/            # Guardrails & policy
+│   ├── concurrency/           # Multi-agent safety
+│   ├── db/                    # Schema & migrations
+│   └── utils/
+│       ├── embedding.js       # Multi-backend embedding
+│       ├── embedding-local.js # @xenova/transformers (384-dim)
+│       ├── cache.js           # LRU cache (200 items, 5min TTL)
+│       ├── config.js          # Configuration
+│       └── logger.js          # Structured logging
+├── scripts/
+│   └── reindex-embeddings.js  # Batch re-index utility
+├── data/
+│   └── memory.db              # SQLite database
+└── package.json
+```
+
+## Keunggulan vs Sistem AI Memory Lain
+
+| Feature | MCP Memory v5.0 | Mem0 | OpenAI Memory |
+|---------|-----------------|------|---------------|
+| **Persistence** | ✅ SQLite/PostgreSQL | ✅ Cloud | ✅ Cloud |
+| **Control** | ✅ TOTAL (SQL direct) | ❌ Blackbox API | ❌ Blackbox |
+| **Data Types** | ✅ 5 structured types | ⚠️ Graph | ❌ Flat text |
+| **Guardrails** | ✅ ACTIVE block/warn | ❌ None | ⚠️ Safety only |
+| **Self-Healing** | ✅ Auto quarantine | ❌ | ❌ |
+| **Loop Breaker** | ✅ Guardrails injection | ❌ | ❌ |
+| **Metacognition** | ✅ memory_reflect | ❌ | ❌ |
+| **Scoring** | ✅ Custom formula | ⚠️ Proprietary | ⚠️ Recency |
+| **Self-Correct** | ✅ Manual reflect + feedback | ✅ Auto-optimize | ❌ |
+| **Forensic Audit** | ✅ 10,000+ entries | ⚠️ Partial | ❌ |
+| **Latency** | ✅ 7-20ms (cache hit <1ms) | ⚠️ 1.4s p95 | ⚠️ Unknown |
+| **Graph** | ✅ 1,315 links | ✅ Full graph | ❌ |
+| **Embedding** | ✅ Local (no API key) | ❌ Requires API | ❌ Built-in |
+| **Cross-Model** | ✅ Conflict detection | ❌ | ❌ |
+
+**Keunggulan utama:** Active Guardrails via Memory — kompetitor pakai memori untuk *ingat konteks*, kita pakai memori untuk *mencegah kesalahan berulang*.
+
+---
+
+## Version History
+
+| Version | Tanggal | Perubahan Utama |
+|---------|---------|----------------|
+| v5.0 | Feb 8, 2026 | Score fix retroactive, enforcer functions migrated, audit compliance |
+| v4.0 | Feb 7, 2026 | LRU cache, front-loading embedding, memory_reflect, archive, consolidate |
+| v3.0 | Jan 2026 | Protected data, anti-summarization, full retrieval mandate |
+| v2.0 | Dec 2025 | 5-layer architecture, knowledge graph, temporal intelligence |
+| v1.0 | Nov 2025 | Base: search, get, upsert, forget, summarize, feedback, maintain |
 
 ## License
 

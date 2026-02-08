@@ -1,7 +1,8 @@
 /**
- * Hybrid search v3.2 - Keyword + Vector + Recency with Local Sentence Transformer
+ * Hybrid search v4.0 - Keyword + Vector + Recency + Usefulness with Decay
  * LAYER 1: Configurable hybrid scoring (keyword 0.5, vector 0.3, recency 0.2)
  * LAYER 3: Temporal-aware recency with type-based decay
+ * LAYER 5: Usefulness integration with per-type score decay (Ebbinghaus-inspired)
  * @module retrieval/hybridSearch
  */
 import { keywordSearch } from './keyword.js';
@@ -182,12 +183,26 @@ function isCredentialItem(item) {
 }
 
 /**
- * Rank results with LAYER 1 weights, LAYER 3 temporal intelligence, and LAYER 4 type priority
+ * LAYER 5: Per-type usefulness decay rates (Ebbinghaus-inspired)
+ * Episodes decay fast (logs become stale), facts/runbooks decay slow (knowledge endures)
+ */
+const USEFULNESS_DECAY_RATES = {
+    'episode': 0.01,    // 30d → 74%, 60d → 55%, 90d → 41%
+    'state': 0.005,     // 30d → 86%, 60d → 74%, 90d → 64%
+    'fact': 0.002,      // 30d → 94%, 60d → 89%, 90d → 84%
+    'runbook': 0.002,   // Same as fact
+    'decision': 0.001   // 30d → 97%, 60d → 94%, 90d → 91% (decisions endure)
+};
+
+/**
+ * Rank results with LAYER 1 weights, LAYER 3 temporal intelligence, LAYER 4 type priority, LAYER 5 usefulness
  * @param {Array} results 
  * @param {object} weights - {keyword, vector, recency}
  * @returns {Array}
  */
 function rankResults(results, weights) {
+    const nowMs = Date.now();
+
     const scored = results.map(item => {
         // LAYER 3: Calculate recency with temporal type awareness
         const timestamp = item.updated_at || item.created_at;
@@ -203,13 +218,25 @@ function rankResults(results, weights) {
         // Normalize keyword score (BM25 can be > 1)
         const normalizedKeyword = Math.min(1.0, (item.keyword_score || 0) / 30);
 
-        // LAYER 4: Type priority boost (NEW)
+        // LAYER 4: Type priority boost
         const typePriority = TYPE_PRIORITY_BOOST[item.type] || 0;
 
         // Extra boost for credential-related items
         const credentialBoost = isCredentialItem(item) ? 0.05 : 0;
 
-        // LAYER 1: Apply configurable weights + LAYER 4: Type priority
+        // LAYER 5: Usefulness score with temporal decay
+        const rawUsefulness = item.usefulness_score || 0;
+        const lastAccess = item.last_used_at || item.updated_at || item.created_at;
+        const daysSinceAccess = Math.max(0, (nowMs - new Date(lastAccess).getTime()) / (1000 * 60 * 60 * 24));
+        const decayRate = USEFULNESS_DECAY_RATES[item.type] || 0.005;
+        const decayFactor = Math.exp(-decayRate * daysSinceAccess);
+        const effectiveUsefulness = rawUsefulness * decayFactor;
+
+        // Sigmoid-like normalization: maps unbounded score to 0.75-1.36 multiplier
+        // Score 0 → 1.0 (neutral), Score 2 → 1.25 (boost), Score -2 → 0.75 (penalty)
+        const usefulnessMultiplier = 1 + (effectiveUsefulness / (Math.abs(effectiveUsefulness) + 2)) * 0.5;
+
+        // LAYER 1: Apply configurable weights + LAYER 4 + LAYER 5
         let finalScore = (
             weights.keyword * normalizedKeyword +
             weights.vector * (item.vector_score || 0) +
@@ -217,10 +244,7 @@ function rankResults(results, weights) {
             verifiedBonus +
             typePriority +
             credentialBoost
-        ) * deprecatedPenalty;
-
-        // No hard cap - allow natural score differentiation for better ranking
-        // Scores > 1.0 indicate very strong multi-signal matches
+        ) * deprecatedPenalty * usefulnessMultiplier;
 
         return {
             ...item,
@@ -233,7 +257,11 @@ function rankResults(results, weights) {
                 verified_bonus: verifiedBonus,
                 temporal_type: temporalType,
                 type_priority: typePriority,
-                credential_boost: credentialBoost
+                credential_boost: credentialBoost,
+                usefulness_raw: rawUsefulness,
+                usefulness_effective: Math.round(effectiveUsefulness * 1000) / 1000,
+                usefulness_multiplier: Math.round(usefulnessMultiplier * 1000) / 1000,
+                decay_factor: Math.round(decayFactor * 1000) / 1000
             }
         };
     });

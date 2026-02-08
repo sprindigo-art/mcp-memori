@@ -1,5 +1,6 @@
 /**
  * memory.maintain - Comprehensive maintenance tool
+ * v4.0 - Added archive + consolidate actions + cache clearing
  * @module mcp/tools/memory.maintain
  */
 import { query } from '../../db/index.js';
@@ -8,18 +9,21 @@ import { mergePolicy } from '../../governance/policyEngine.js';
 import { pruneItems, pruneOldEpisodes } from '../../governance/prune.js';
 import { deduplicateItems, detectConflicts } from '../../governance/conflict.js';
 import { checkLoopBreaker } from '../../governance/loopbreaker.js';
+import { createGuardrail } from '../../governance/guardrails.js';
+import { cosineSimilarity } from '../../utils/embedding.js';
+import { clearCache } from '../../utils/cache.js';
 import { contentHash } from '../../utils/hash.js';
 import { now } from '../../utils/time.js';
 import { v4 as uuidv4 } from 'uuid';
 import logger from '../../utils/logger.js';
-import { getForensicMeta } from '../../utils/forensic.js';
+import { getForensicMeta } from '../../utils/forensic.js'; // now compact by default (v4.0)
 
 /**
  * Tool definition for MCP
  */
 export const definition = {
     name: 'memory_maintain',
-    description: 'Maintenance: dedup, conflict detection, prune, compact, loopbreaker',
+    description: 'Maintenance: dedup, conflict, prune, compact, loopbreak, clean_links, auto_guardrails, archive, consolidate',
     inputSchema: {
         type: 'object',
         properties: {
@@ -32,7 +36,7 @@ export const definition = {
             actions: {
                 type: 'array',
                 items: { type: 'string' },
-                description: 'Actions: dedup, conflict, prune, compact, loopbreak'
+                description: 'Actions: dedup, conflict, prune, compact, loopbreak, clean_links, auto_guardrails, archive, consolidate'
             },
             policy: {
                 type: 'object',
@@ -76,7 +80,11 @@ export async function execute(params) {
             conflict: { conflicts: [], links_added: 0 },
             prune: { quarantined: [], deleted: [], deprecated: [] },
             compact: { episodes_pruned: [] },
-            loopbreak: { mistakes_updated: 0, guardrails_added: false }
+            loopbreak: { mistakes_updated: 0, guardrails_added: false },
+            clean_links: { orphans_removed: 0, dupes_removed: 0 },
+            auto_guardrails: { scanned: 0, created: 0, patterns: [] },
+            archive: { archived: 0, items: [] },
+            consolidate: { clusters_found: 0, facts_created: 0, episodes_archived: 0 }
         },
         meta: { trace_id: traceId }
     };
@@ -153,6 +161,267 @@ export async function execute(params) {
                 };
             }
 
+            // 6. Clean orphan & duplicate links
+            if (actions.includes('clean_links')) {
+                logger.debug('Running clean_links', { projectId, dryRun });
+
+                // Count orphan links before cleanup
+                const orphanCount = await query(
+                    `SELECT COUNT(*) as cnt FROM memory_links l 
+                     WHERE NOT EXISTS (SELECT 1 FROM memory_items m WHERE m.id = l.from_id AND m.status='active') 
+                        OR NOT EXISTS (SELECT 1 FROM memory_items m WHERE m.id = l.to_id AND m.status='active')`
+                );
+                const orphans = orphanCount[0]?.cnt || 0;
+
+                // Count duplicate links (same from_id + to_id + relation)
+                const dupeCount = await query(
+                    `SELECT COUNT(*) as cnt FROM (
+                        SELECT from_id, to_id, relation, COUNT(*) as c 
+                        FROM memory_links GROUP BY from_id, to_id, relation HAVING c > 1
+                    )`
+                );
+                const dupes = dupeCount[0]?.cnt || 0;
+
+                if (!dryRun) {
+                    // Delete orphan links
+                    if (orphans > 0) {
+                        await query(
+                            `DELETE FROM memory_links WHERE id IN (
+                                SELECT l.id FROM memory_links l 
+                                WHERE NOT EXISTS (SELECT 1 FROM memory_items m WHERE m.id = l.from_id AND m.status='active') 
+                                   OR NOT EXISTS (SELECT 1 FROM memory_items m WHERE m.id = l.to_id AND m.status='active')
+                            )`
+                        );
+                    }
+
+                    // Delete duplicate links (keep oldest)
+                    if (dupes > 0) {
+                        await query(
+                            `DELETE FROM memory_links WHERE id NOT IN (
+                                SELECT MIN(id) FROM memory_links GROUP BY from_id, to_id, relation
+                            )`
+                        );
+                    }
+                }
+
+                result.actions_planned_or_done.clean_links = {
+                    orphans_removed: orphans,
+                    dupes_removed: dupes
+                };
+            }
+
+            // 7. Auto-populate guardrails from decision items
+            if (actions.includes('auto_guardrails')) {
+                logger.debug('Running auto_guardrails', { projectId, dryRun });
+
+                // Scan decision items with guardrail-related tags or titles
+                const guardrailDecisions = await query(
+                    `SELECT id, title, content, tags FROM memory_items 
+                     WHERE tenant_id = ? AND project_id = ? AND status = 'active'
+                     AND type = 'decision'
+                     AND (
+                         tags LIKE '%guardrail%' OR tags LIKE '%banned%' OR tags LIKE '%forbidden%'
+                         OR tags LIKE '%never%' OR tags LIKE '%critical%' OR tags LIKE '%violation%'
+                         OR title LIKE '%GUARDRAIL%' OR title LIKE '%FORBIDDEN%' OR title LIKE '%BANNED%'
+                         OR title LIKE '%NEVER%' OR title LIKE '%DO NOT REPEAT%'
+                     )
+                     ORDER BY updated_at DESC LIMIT 50`,
+                    [tenantId, projectId]
+                );
+
+                let created = 0;
+                const patterns = [];
+
+                for (const decision of guardrailDecisions) {
+                    // Extract CVE patterns (e.g., CVE-2024-1086)
+                    const cveMatches = (decision.content || '').match(/CVE-\d{4}-\d{4,}/g) || [];
+                    // Extract technique keywords from title
+                    const titlePatterns = [];
+                    if (/kernel.*(exploit|crash)/i.test(decision.title)) titlePatterns.push('kernel_exploit_production');
+                    if (/pkill/i.test(decision.title)) titlePatterns.push('pkill_command');
+                    if (/iodined/i.test(decision.title)) titlePatterns.push('iodined_restart');
+                    if (/cloaking/i.test(decision.title)) titlePatterns.push('cloaking_technique');
+                    if (/rm\s*-rf/i.test(decision.content)) titlePatterns.push('rm_rf_destructive');
+
+                    const allPatterns = [...new Set([...cveMatches, ...titlePatterns])];
+
+                    for (const pattern of allPatterns) {
+                        if (!dryRun) {
+                            try {
+                                const result = await createGuardrail({
+                                    projectId,
+                                    tenantId,
+                                    ruleType: 'warn',
+                                    pattern: `GUARDRAIL:${pattern}`,
+                                    description: `[AUTO] ${decision.title} — Pattern: ${pattern}`,
+                                    suppressIds: [decision.id],
+                                    expiresInDays: 90
+                                });
+                                if (result.created) created++;
+                            } catch (err) {
+                                logger.warn('Failed to create auto-guardrail', { pattern, error: err.message });
+                            }
+                        }
+                        patterns.push(pattern);
+                    }
+                }
+
+                result.actions_planned_or_done.auto_guardrails = {
+                    scanned: guardrailDecisions.length,
+                    created,
+                    patterns
+                };
+            }
+
+            // 8. Auto-archive old unused items (v4.0)
+            if (actions.includes('archive')) {
+                logger.debug('Running archive', { projectId, dryRun });
+
+                // Find items older than 180 days, never accessed, with safe exceptions
+                const archiveCandidates = await query(
+                    `SELECT id, title, type, tags, created_at, last_used_at 
+                     FROM memory_items 
+                     WHERE tenant_id = ? AND project_id = ? AND status = 'active'
+                     AND created_at < datetime('now', '-180 days')
+                     AND (last_used_at IS NULL OR last_used_at = created_at)
+                     AND type NOT IN ('fact', 'decision')
+                     AND tags NOT LIKE '%critical%'
+                     AND tags NOT LIKE '%guardrail%'
+                     AND tags NOT LIKE '%credential%'
+                     ORDER BY created_at ASC LIMIT 100`,
+                    [tenantId, projectId]
+                );
+
+                // Also exclude items that have links (they're referenced by others)
+                const toArchive = [];
+                for (const candidate of archiveCandidates) {
+                    const linkCount = await query(
+                        `SELECT COUNT(*) as cnt FROM memory_links WHERE from_id = ? OR to_id = ?`,
+                        [candidate.id, candidate.id]
+                    );
+                    if ((linkCount[0]?.cnt || 0) === 0) {
+                        toArchive.push(candidate);
+                    }
+                }
+
+                if (!dryRun && toArchive.length > 0) {
+                    const ids = toArchive.map(i => i.id);
+                    const placeholders = ids.map(() => '?').join(',');
+                    await query(
+                        `UPDATE memory_items SET status = 'deprecated', status_reason = 'auto-archive: >180 days, never accessed', updated_at = datetime('now') WHERE id IN (${placeholders})`,
+                        ids
+                    );
+                }
+
+                result.actions_planned_or_done.archive = {
+                    archived: toArchive.length,
+                    items: toArchive.map(i => ({ id: i.id, title: i.title, age: i.created_at }))
+                };
+            }
+
+            // 9. Consolidate similar episodes using cosine similarity (v4.0)
+            if (actions.includes('consolidate')) {
+                logger.debug('Running consolidate', { projectId, dryRun });
+
+                const SIMILARITY_THRESHOLD = 0.85;
+                let clustersFound = 0;
+                let factsCreated = 0;
+                let episodesArchived = 0;
+
+                // Fetch recent episodes with embeddings (limited batch for O(n^2) safety)
+                const episodes = await query(
+                    `SELECT id, title, content, tags, embedding, created_at 
+                     FROM memory_items 
+                     WHERE tenant_id = ? AND project_id = ? AND status = 'active' 
+                     AND type = 'episode' AND embedding IS NOT NULL
+                     ORDER BY created_at DESC LIMIT 100`,
+                    [tenantId, projectId]
+                );
+
+                // Pairwise cosine similarity clustering
+                const clustered = new Set();
+                const clusters = [];
+
+                for (let i = 0; i < episodes.length; i++) {
+                    if (clustered.has(episodes[i].id)) continue;
+                    const cluster = [episodes[i]];
+                    let embedding_i;
+                    try { embedding_i = JSON.parse(episodes[i].embedding); } catch { continue; }
+
+                    for (let j = i + 1; j < episodes.length; j++) {
+                        if (clustered.has(episodes[j].id)) continue;
+                        let embedding_j;
+                        try { embedding_j = JSON.parse(episodes[j].embedding); } catch { continue; }
+
+                        const similarity = cosineSimilarity(embedding_i, embedding_j);
+                        if (similarity >= SIMILARITY_THRESHOLD) {
+                            cluster.push(episodes[j]);
+                            clustered.add(episodes[j].id);
+                        }
+                    }
+
+                    // Only process clusters with 3+ items
+                    if (cluster.length >= 3) {
+                        clustered.add(cluster[0].id);
+                        clusters.push(cluster);
+                    }
+                }
+
+                clustersFound = clusters.length;
+
+                // For each cluster: create summary fact and archive episodes
+                if (!dryRun) {
+                    for (const cluster of clusters) {
+                        const titles = cluster.map(e => e.title).join(' | ');
+                        const summaryTitle = `[CONSOLIDATED] ${cluster.length} similar episodes: ${titles.substring(0, 100)}`;
+
+                        // Check if consolidated fact already exists
+                        const exists = await query(
+                            `SELECT id FROM memory_items WHERE title LIKE ? AND type = 'fact' AND status = 'active' LIMIT 1`,
+                            [`%${titles.substring(0, 50)}%`]
+                        );
+
+                        if (exists.length === 0) {
+                            const { v4: uuid4 } = await import('uuid');
+                            const id = uuid4();
+                            const { contentHash } = await import('../../utils/hash.js');
+                            const summaryContent = cluster.map(e => `- ${e.title} (${e.created_at})`).join('\n');
+
+                            await query(
+                                `INSERT INTO memory_items (id, tenant_id, project_id, type, title, content, tags, status, content_hash, created_at, updated_at, last_used_at)
+                                 VALUES (?, ?, ?, 'fact', ?, ?, '[]', 'active', ?, datetime('now'), datetime('now'), datetime('now'))`,
+                                [id, tenantId, projectId, summaryTitle, summaryContent, contentHash(summaryContent)]
+                            );
+                            factsCreated++;
+
+                            // Deprecate the clustered episodes (keep the first one active)
+                            const toArchiveIds = cluster.slice(1).map(e => e.id);
+                            if (toArchiveIds.length > 0) {
+                                const placeholders = toArchiveIds.map(() => '?').join(',');
+                                await query(
+                                    `UPDATE memory_items SET status = 'deprecated', status_reason = 'consolidated into fact' WHERE id IN (${placeholders})`,
+                                    toArchiveIds
+                                );
+                                episodesArchived += toArchiveIds.length;
+                            }
+                        }
+                    }
+                }
+
+                result.actions_planned_or_done.consolidate = {
+                    clusters_found: clustersFound,
+                    facts_created: factsCreated,
+                    episodes_archived: episodesArchived,
+                    preview: clusters.map(c => ({
+                        size: c.length,
+                        sample_titles: c.slice(0, 3).map(e => e.title)
+                    }))
+                };
+            }
+
+            // Clear cache after maintenance (any data may have changed)
+            clearCache();
+
         });
 
         // Build Forensic Metadata
@@ -187,7 +456,10 @@ function summarizeResult(actions) {
         prune_deleted: actions.prune.deleted?.length || 0,
         prune_deprecated: actions.prune.deprecated?.length || 0,
         episodes_pruned: actions.compact.episodes_pruned?.length || 0,
-        loopbreak_updated: actions.loopbreak.mistakes_updated || 0
+        loopbreak_updated: actions.loopbreak.mistakes_updated || 0,
+        orphan_links_removed: actions.clean_links?.orphans_removed || 0,
+        dupe_links_removed: actions.clean_links?.dupes_removed || 0,
+        auto_guardrails_created: actions.auto_guardrails?.created || 0
     };
 }
 

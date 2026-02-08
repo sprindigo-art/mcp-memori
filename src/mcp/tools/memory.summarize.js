@@ -20,7 +20,8 @@ export const definition = {
     inputSchema: {
         type: 'object',
         properties: {
-            project_id: { type: 'string', description: 'Project ID' }
+            project_id: { type: 'string', description: 'Project ID' },
+            compact: { type: 'boolean', description: 'Compact mode: minimal output (<30 lines) for fast bootstrap. Default: false' }
         },
         required: ['project_id']
     }
@@ -33,9 +34,57 @@ export const definition = {
  */
 export async function execute(params) {
     const traceId = uuidv4();
-    const { project_id: projectId, tenant_id: tenantId = 'local-user' } = params;
+    const { project_id: projectId, tenant_id: tenantId = 'local-user', compact = false } = params;
 
     try {
+        // COMPACT MODE: Fast bootstrap with minimal output
+        if (compact) {
+            const states = await query(
+                `SELECT id, title, updated_at FROM memory_items
+                 WHERE tenant_id = ? AND project_id = ? AND type = 'state' AND status = 'active'
+                 ORDER BY updated_at DESC LIMIT 3`,
+                [tenantId, projectId]
+            );
+
+            const blockers = await query(
+                `SELECT id, title FROM memory_items
+                 WHERE tenant_id = ? AND project_id = ? AND status = 'active'
+                   AND (tags LIKE '%blocker%' OR tags LIKE '%blocked%')
+                 ORDER BY updated_at DESC LIMIT 5`,
+                [tenantId, projectId]
+            );
+
+            let guardrailCount = 0;
+            let recentGuardrails = [];
+            try {
+                const gcRow = await queryOne(
+                    `SELECT COUNT(*) as cnt FROM guardrails WHERE project_id = ?`,
+                    [projectId]
+                );
+                guardrailCount = gcRow?.cnt || 0;
+                recentGuardrails = await query(
+                    `SELECT rule_text FROM guardrails WHERE project_id = ? ORDER BY created_at DESC LIMIT 3`,
+                    [projectId]
+                );
+            } catch { /* guardrails table may not exist */ }
+
+            const totalItems = await queryOne(
+                `SELECT COUNT(*) as cnt FROM memory_items WHERE project_id = ? AND status = 'active'`,
+                [projectId]
+            );
+
+            const needsMaintenance = (totalItems?.cnt || 0) > 500;
+
+            return {
+                compact: true,
+                states: states.map(s => ({ id: s.id, title: s.title, updated_at: s.updated_at })),
+                blockers: blockers.map(b => ({ id: b.id, title: b.title })),
+                guardrails: { count: guardrailCount, recent: recentGuardrails.map(g => g.rule_text) },
+                total_items: totalItems?.cnt || 0,
+                maintenance_needed: needsMaintenance,
+                meta: { trace_id: traceId, mode: 'compact' }
+            };
+        }
         const summary = {
             state_latest: null,
             key_decisions: [],
@@ -151,12 +200,18 @@ export async function execute(params) {
             snippet: generateSnippet(t.content, 80)
         }));
 
-        // Extract blockers (items with 'blocker' tag or 'BLOCKER' in content)
+        // Extract blockers - STRICT: only tag-based or title [BLOCKER], exclude resolved items
         const blockers = await query(
             `SELECT id, title, content
        FROM memory_items
        WHERE tenant_id = ? AND project_id = ? AND status = 'active'
-       AND (tags LIKE '%"blocker"%' OR title LIKE '%BLOCKER%' OR content LIKE '%BLOCKER%')
+       AND (tags LIKE '%"blocker"%' OR title LIKE '%[BLOCKER]%')
+       AND content NOT LIKE '%RESOLVED%'
+       AND content NOT LIKE '%SOLVED%'
+       AND content NOT LIKE '%COMPLETED%'
+       AND content NOT LIKE '%FIXED%'
+       AND title NOT LIKE '%SOLVED%'
+       AND title NOT LIKE '%RESOLVED%'
        ORDER BY updated_at DESC
        LIMIT 3`,
             [tenantId, projectId]
@@ -164,7 +219,7 @@ export async function execute(params) {
 
         summary.blockers = blockers.map(b => ({
             id: b.id,
-            title: b.title.replace(/BLOCKER:?\s*/i, ''),
+            title: b.title.replace(/\[?BLOCKER\]?:?\s*/i, ''),
             snippet: generateSnippet(b.content, 80)
         }));
 

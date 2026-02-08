@@ -8,6 +8,7 @@ import { now, daysAgo } from '../utils/time.js';
 import { v4 as uuidv4 } from 'uuid';
 import logger from '../utils/logger.js';
 import { isProtectedItem } from './policyEngine.js';
+import { createGuardrail } from './guardrails.js';
 
 /**
  * Record a mistake
@@ -152,8 +153,26 @@ export async function checkLoopBreaker({ projectId, tenantId, threshold = 2, dry
         }
     }
 
-    // Add guardrail to state if repeated mistakes found
+    // Add guardrail to BOTH: guardrails table AND state content
     if (repeatedMistakes.length > 0 && !dryRun) {
+        // INSERT into guardrails table (FIX: was never inserted before!)
+        for (const mistake of repeatedMistakes) {
+            try {
+                await createGuardrail({
+                    projectId,
+                    tenantId,
+                    ruleType: 'warn',
+                    pattern: mistake.signature || mistake.notes || 'repeated_mistake',
+                    description: `Auto-guardrail: Repeated mistake (${mistake.count}x in 7d) - ${mistake.notes || mistake.signature}`,
+                    suppressIds: result.quarantinedIds,
+                    expiresInDays: 30
+                });
+            } catch (err) {
+                logger.warn('Failed to create guardrail from loopbreaker', { error: err.message });
+            }
+        }
+
+        // Also append to state content (legacy behavior)
         await addGuardrailToState({
             projectId,
             tenantId,

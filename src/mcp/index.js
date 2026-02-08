@@ -9,6 +9,8 @@ import forgetTool from './tools/memory.forget.js';
 import summarizeTool from './tools/memory.summarize.js';
 import feedbackTool from './tools/memory.feedback.js';
 import maintainTool from './tools/memory.maintain.js';
+import statsTool from './tools/memory.stats.js';
+import reflectTool from './tools/memory.reflect.js';
 
 /**
  * All available tools
@@ -20,7 +22,9 @@ export const tools = {
     'memory_forget': forgetTool,
     'memory_summarize': summarizeTool,
     'memory_feedback': feedbackTool,
-    'memory_maintain': maintainTool
+    'memory_maintain': maintainTool,
+    'memory_stats': statsTool,
+    'memory_reflect': reflectTool
 };
 
 /**

@@ -1,5 +1,6 @@
 /**
  * memory.upsert - Insert or update memory items (idempotent)
+ * v4.0 - Front-Loading Embedding + Maintenance Counter + Cache Invalidation
  * @module mcp/tools/memory.upsert
  */
 import { query, queryOne, transaction } from '../../db/index.js';
@@ -12,8 +13,9 @@ import { normalizeTags } from '../../utils/normalize.js';
 import { now } from '../../utils/time.js';
 import { v4 as uuidv4 } from 'uuid';
 import logger from '../../utils/logger.js';
-import { getForensicMeta } from '../../utils/forensic.js';
+import { getMinimalForensicMeta } from '../../utils/forensic.js';
 import { suggestRelations, addRelation } from '../../retrieval/graph.js';
+import { invalidateCache } from '../../utils/cache.js';
 
 /**
  * Tool definition for MCP
@@ -44,7 +46,8 @@ export const definition = {
                         },
                         verified: { type: 'boolean', description: 'Is verified' },
                         confidence: { type: 'number', description: 'Confidence 0-1' },
-                        provenance_json: { type: 'object', description: 'Provenance info' }
+                        provenance_json: { type: 'object', description: 'Provenance info' },
+                        success: { type: 'boolean', description: 'Whether the action succeeded (boosts usefulness_score)' }
                     },
                     required: ['type', 'project_id', 'title', 'content']
                 },
@@ -61,8 +64,9 @@ export const definition = {
  * @returns {Promise<object>}
  */
 /**
- * ANTI-LUPA FORMAT VALIDATION v2.0
- * Validates that memory content follows required format
+ * ANTI-LUPA FORMAT VALIDATION v3.0 — STRICT MODE
+ * Episode WAJIB punya Command: DAN ## OUTCOME
+ * Arrow Result / COMMANDS EXECUTED TIDAK LAGI diterima
  * @param {object} item - Memory item
  * @returns {object} { valid: boolean, warnings: string[] }
  */
@@ -71,7 +75,7 @@ function validateMemoryFormat(item) {
     const content = item.content || '';
     const type = item.type;
 
-    // RUNBOOK: MUST have exact commands
+    // RUNBOOK: MUST have exact commands + steps
     if (type === 'runbook') {
         if (!content.includes('Command:') && !content.includes('command:')) {
             warnings.push('RUNBOOK harus berisi "Command:" dengan exact command. Format: "Command: [EXACT COMMAND]"');
@@ -81,17 +85,18 @@ function validateMemoryFormat(item) {
         }
     }
 
-    // EPISODE: MUST have commands executed
+    // EPISODE: MUST have Command: AND ## OUTCOME (STRICT v3.0)
     if (type === 'episode') {
-        const hasCommandFormat =
-            content.includes('→ Result') ||
-            content.includes('-> Result') ||
-            content.includes('COMMANDS EXECUTED') ||
-            content.includes('Command:') ||
-            content.includes('command:');
+        // WAJIB: Command: atau command: (case-insensitive check)
+        const hasCommand = content.includes('Command:') || content.includes('command:');
+        if (!hasCommand) {
+            warnings.push('EPISODE WAJIB berisi "Command:" dengan exact command yang dieksekusi. Format: "Command: [EXACT COMMAND]"');
+        }
 
-        if (!hasCommandFormat) {
-            warnings.push('EPISODE harus berisi exact command yang dieksekusi. Format: "[COMMAND] → Result: [OUTPUT]"');
+        // WAJIB: ## OUTCOME section
+        const hasOutcome = /##\s*OUTCOME/i.test(content);
+        if (!hasOutcome) {
+            warnings.push('EPISODE WAJIB berisi "## OUTCOME" section. Format: "## OUTCOME: [RESULT]"');
         }
 
         // Check for lazy status-only format (FORBIDDEN)
@@ -101,7 +106,7 @@ function validateMemoryFormat(item) {
             /berhasil upload/i
         ];
         for (const pattern of lazyPatterns) {
-            if (pattern.test(content) && !content.includes('Command:')) {
+            if (pattern.test(content) && !hasCommand) {
                 warnings.push('DILARANG: Status-only tanpa exact command. Harus ada "Command:" di setiap step.');
             }
         }
@@ -216,17 +221,39 @@ export async function execute(params) {
     }
 
     // Write audit log
+    const hasErrors = results.some(r => r.status === 'error');
     await writeAuditLog(traceId, 'memory_upsert',
         { item_count: items.length },
         { upserted_count: results.filter(r => r.id).length },
         items[0]?.project_id || 'unknown',
-        tenantId
+        tenantId,
+        hasErrors
     );
 
-    // Build Forensic Metadata
-    const forensicMeta = await getForensicMeta(tenantId, items[0]?.project_id || 'unknown');
+    // MAINTENANCE COUNTER: Increment and check if maintenance needed
+    let maintenanceWarning = null;
+    try {
+        const successCount = results.filter(r => r.id).length;
+        if (successCount > 0) {
+            await query(
+                `UPDATE system_state SET value = CAST(value AS INTEGER) + ?, updated_at = datetime('now') WHERE key = 'upsert_count'`,
+                [successCount]
+            );
+            const counter = await queryOne(`SELECT value FROM system_state WHERE key = 'upsert_count'`);
+            const count = parseInt(counter?.value || '0', 10);
+            if (count > 0 && count % 20 === 0) {
+                maintenanceWarning = `[SYSTEM] Maintenance recommended (${count} upserts since last clean). Run memory_maintain with actions=["dedup","clean_links","auto_guardrails"] now.`;
+                logger.info('Maintenance counter triggered', { count });
+            }
+        }
+    } catch (counterErr) {
+        logger.debug('Maintenance counter update failed', { error: counterErr.message });
+    }
 
-    return {
+    // Build Minimal Forensic Metadata (upsert is high-frequency, minimal bloat)
+    const forensicMeta = getMinimalForensicMeta(tenantId, items[0]?.project_id || 'unknown');
+
+    const response = {
         upserted: results,
         format_warnings: formatWarnings.length > 0 ? formatWarnings : undefined,
         meta: {
@@ -235,6 +262,13 @@ export async function execute(params) {
             anti_lupa_validation: formatWarnings.length === 0 ? 'PASSED' : 'WARNING - Format tidak sesuai template'
         }
     };
+
+    // Inject maintenance warning if triggered
+    if (maintenanceWarning) {
+        response.maintenance_warning = maintenanceWarning;
+    }
+
+    return response;
 }
 
 /**
@@ -289,6 +323,9 @@ async function upsertItem(item, tenantId, traceId) {
                     `SELECT version, status FROM memory_items WHERE id = ?`,
                     [existingId]
                 );
+
+                // Invalidate cache on update
+                invalidateCache(existingId);
 
                 return {
                     id: existingId,
@@ -408,6 +445,9 @@ async function upsertItem(item, tenantId, traceId) {
                     trace_id: traceId
                 });
 
+                // Invalidate cache on content update
+                invalidateCache(titleMatch.id);
+
                 return {
                     id: titleMatch.id,
                     version: updated.version,
@@ -420,18 +460,20 @@ async function upsertItem(item, tenantId, traceId) {
             // Insert new item
             const id = uuidv4();
 
-            // Generate embedding if available (v3.2)
+            // Generate embedding with FRONT-LOADING strategy (v4.0)
+            // Puts Title + Tags + Outcome BEFORE content to solve 256-token truncation
             let embedding = null;
             if (await isEmbeddingAvailable()) {
                 try {
-                    const textToEmbed = `${item.title} ${item.content}`;
+                    const textToEmbed = buildFrontLoadedEmbeddingInput(item);
                     const result = await generateEmbedding(textToEmbed);
                     if (result && result.embedding) {
                         embedding = result.embedding;
-                        logger.debug('Embedding generated', {
+                        logger.debug('Embedding generated (front-loaded)', {
                             id,
                             backend: result.backend,
-                            dim: embedding.length
+                            dim: embedding.length,
+                            input_length: textToEmbed.length
                         });
                     }
                 } catch (err) {
@@ -439,12 +481,22 @@ async function upsertItem(item, tenantId, traceId) {
                 }
             }
 
+            // Calculate initial usefulness_score from type + success flag
+            // Base scores ensure items start with meaningful ranking weight
+            const BASE_SCORES = { fact: 0.5, runbook: 0.5, decision: 0.2, state: 0.2, episode: 0.2 };
+            let initialScore = BASE_SCORES[item.type] || 0.2;
+            if (item.success === true) {
+                initialScore += 1.0;  // Success boost (fact success = 1.5, episode success = 1.2)
+            } else if (item.success === false) {
+                initialScore -= 0.5;  // Failure penalty (fact fail = 0.0, episode fail = -0.3)
+            }
+
             await query(
                 `INSERT INTO memory_items (
           id, tenant_id, project_id, type, title, content, tags,
           embedding, verified, confidence, provenance_json, content_hash,
-          created_at, updated_at, last_used_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          usefulness_score, created_at, updated_at, last_used_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                 [
                     id,
                     tenantId,
@@ -458,6 +510,7 @@ async function upsertItem(item, tenantId, traceId) {
                     item.confidence || 0.5,
                     JSON.stringify(item.provenance_json || {}),
                     hash,
+                    initialScore,
                     now(),
                     now(),
                     now()
@@ -513,13 +566,13 @@ async function upsertItem(item, tenantId, traceId) {
 }
 
 /**
- * Write to audit log
+ * Write to audit log with is_error flag
  */
-async function writeAuditLog(traceId, toolName, request, response, projectId, tenantId) {
+async function writeAuditLog(traceId, toolName, request, response, projectId, tenantId, isError = false) {
     try {
         await query(
-            `INSERT INTO audit_log (id, trace_id, ts, tool_name, request_json, response_json, project_id, tenant_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO audit_log (id, trace_id, ts, tool_name, request_json, response_json, project_id, tenant_id, is_error)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             [
                 uuidv4(),
                 traceId,
@@ -528,12 +581,54 @@ async function writeAuditLog(traceId, toolName, request, response, projectId, te
                 JSON.stringify(request),
                 JSON.stringify(response),
                 projectId,
-                tenantId
+                tenantId,
+                isError ? 1 : 0
             ]
         );
     } catch (err) {
         logger.warn('Audit log write failed', { error: err.message });
     }
+}
+
+/**
+ * Build front-loaded embedding input string
+ * Strategy: Put Title + Tags + Outcome BEFORE Content
+ * This ensures the most important signals are within the 256-token window
+ * of all-MiniLM-L6-v2
+ * @param {object} item - Memory item
+ * @returns {string} Optimized embedding input
+ */
+function buildFrontLoadedEmbeddingInput(item) {
+    const parts = [];
+
+    // 1. Title (always first - highest signal)
+    parts.push(`TITLE: ${item.title}`);
+
+    // 2. Tags (high signal density)
+    const tags = normalizeTags(item.tags);
+    if (tags.length > 0) {
+        parts.push(`TAGS: ${tags.join(', ')}`);
+    }
+
+    // 3. Extract Outcome from content (for episodes) - critical info often at end
+    const content = item.content || '';
+    const outcomeMatch = content.match(/##\s*OUTCOME[:\s]*(.*?)(?=\n##|$)/is);
+    if (outcomeMatch && outcomeMatch[1]) {
+        const outcome = outcomeMatch[1].trim().substring(0, 200);
+        parts.push(`OUTCOME: ${outcome}`);
+    }
+
+    // 4. Extract Command from content (for episodes/runbooks)
+    const commandMatch = content.match(/Command:\s*(.*?)(?=\n|$)/i);
+    if (commandMatch && commandMatch[1]) {
+        parts.push(`CMD: ${commandMatch[1].trim().substring(0, 150)}`);
+    }
+
+    // 5. Content body (truncated to fit remaining token budget)
+    // Front-loaded parts ~100-200 chars, remaining budget ~800 chars for content
+    parts.push(content.substring(0, 800));
+
+    return parts.join(' | ');
 }
 
 export default { definition, execute };

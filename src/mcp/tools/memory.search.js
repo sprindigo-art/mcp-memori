@@ -33,6 +33,11 @@ export const definition = {
                 items: { type: 'string' },
                 description: 'Filter by tags'
             },
+            required_tags: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Mandatory tags - results MUST contain ALL of these tags'
+            },
             limit: { type: 'number', description: 'Max results (default: 10)' },
             override_quarantine: { type: 'boolean', description: 'Include quarantined items (default: false)' },
             allow_relations: { type: 'boolean', description: 'Enable multi-hop graph reasoning (default: false)' }
@@ -89,17 +94,24 @@ function expandQuery(query) {
     if (!query) return query;
 
     const queryLower = query.toLowerCase();
-    const expandedTerms = new Set();
+    const originalTerms = queryLower.split(/\s+/);
+    const expandedTerms = new Set(originalTerms);
 
-    // Add original query terms
-    queryLower.split(/\s+/).forEach(term => expandedTerms.add(term));
+    let expansionsAdded = 0;
+    const MAX_EXPANSIONS = 5; // Cap total expanded terms to prevent over-broadening
 
     // Check each synonym group
     for (const [key, synonyms] of Object.entries(QUERY_SYNONYMS)) {
+        if (expansionsAdded >= MAX_EXPANSIONS) break;
         if (queryLower.includes(key)) {
-            // Add up to 3 most relevant synonyms
-            synonyms.slice(0, 3).forEach(syn => {
-                syn.split(/\s+/).forEach(word => expandedTerms.add(word));
+            // Add up to 2 most relevant synonyms (reduced from 3)
+            synonyms.slice(0, 2).forEach(syn => {
+                if (expansionsAdded >= MAX_EXPANSIONS) return;
+                // Only add single-word synonyms to avoid phrase explosion
+                if (!syn.includes(' ')) {
+                    expandedTerms.add(syn);
+                    expansionsAdded++;
+                }
             });
         }
     }
@@ -123,6 +135,7 @@ export async function execute(params) {
         tenant_id: tenantId = 'local-user',
         types = [],
         tags = [],
+        required_tags: requiredTags = [],
         limit = 50,
         override_quarantine: overrideQuarantine = false,
         allow_relations: allowRelations = false
@@ -144,46 +157,33 @@ export async function execute(params) {
             limit: limit * 2 // Get more for reranking
         });
 
-        // FORENSIC SEARCH: Cari yang disembunyikan
-        let excludedItems = [];
-        if (!overrideQuarantine) {
-            // Kita lakukan search terpisah KHUSUS untuk barang quarantined
-            // agar bisa diekspos sebagai "Excluded" di metadata forensik
-            const { results: hiddenResults } = await hybridSearch({
-                query: expandedQuery,
-                projectId,
-                tenantId,
-                types,
-                tags: normalizeTags(tags),
-                overrideQuarantine: true, // Force include
-                limit: 5 // Cukup ambil sampel
-            });
+        // Rerank results
+        let reranked = rerank(rawResults, searchQuery, { maxResults: limit * 2 });
 
-            // Filter hanya yang statusnya quarantined dan tidak ada di hasil normal
-            const normalIds = new Set(rawResults.map(r => r.id));
-            excludedItems = hiddenResults
-                .filter(r => r.status === 'quarantined' && !normalIds.has(r.id))
-                .map(r => ({
-                    id: r.id,
-                    title: r.title,
-                    reason: 'quarantined',
-                    original_status: r.status
-                }));
+        // REQUIRED_TAGS FILTER: Post-filter to ensure ALL required tags are present
+        if (requiredTags.length > 0) {
+            reranked = reranked.filter(item => {
+                let itemTags = [];
+                try { itemTags = typeof item.tags === 'string' ? JSON.parse(item.tags || '[]') : (item.tags || []); } catch { itemTags = []; }
+                const lowerTags = itemTags.map(t => t.toLowerCase());
+                return requiredTags.every(rt => lowerTags.includes(rt.toLowerCase()));
+            });
         }
 
-        // Rerank results
-        const reranked = rerank(rawResults, searchQuery, { maxResults: limit });
+        // Take top N after filtering
+        reranked = reranked.slice(0, limit);
 
-        // Format results - EXTREME LIGHTWEIGHT (ANTI-TRUNCATION)
-        // Only essential fields for discovery. Use memory_get for full details.
+        // Format results - WITH SNIPPET + TAGS for immediate understanding
         const results = reranked.map(item => ({
             id: item.id,
             type: item.type,
             title: item.title,
+            snippet: generateSnippet(item.content || '', 150),
+            tags: (() => { try { return typeof item.tags === 'string' ? JSON.parse(item.tags || '[]') : (item.tags || []); } catch { return []; } })(),
             score: Math.round((item.final_score || item.score) * 1000) / 1000
         }));
 
-        // Update last_used_at
+        // Update last_used_at ONLY (score increment moved to memory_get for true interest signal)
         if (results.length > 0) {
             const ids = results.map(r => r.id);
             const placeholders = ids.map(() => '?').join(',');
@@ -193,15 +193,49 @@ export async function execute(params) {
             );
         }
 
-        // Build Forensic Metadata
+        // GUARDRAIL WARNING CHECK: Surface relevant warnings from guardrails table
+        let warnings = [];
+        try {
+            // Extract CVE patterns and key terms from the original query
+            const cveInQuery = (searchQuery || '').match(/CVE-\d{4}-\d{4,}/gi) || [];
+            const queryTerms = (searchQuery || '').toLowerCase().split(/\s+/).filter(t => t.length > 3);
+
+            // Check guardrails table for matching patterns
+            const activeGuardrails = await query(
+                `SELECT description, pattern_signature, rule_type FROM guardrails 
+                 WHERE tenant_id = ? AND project_id = ? AND active = 1
+                 AND (expires_at IS NULL OR expires_at > ?)`,
+                [tenantId, projectId, now()]
+            );
+
+            for (const g of activeGuardrails) {
+                const descLower = (g.description || '').toLowerCase();
+                // Match if: CVE in query matches guardrail, or query keyword appears in description
+                const cveMatch = cveInQuery.some(cve => descLower.includes(cve.toLowerCase()));
+                const keywordMatch = queryTerms.some(term =>
+                    descLower.includes(term) &&
+                    !['dari', 'yang', 'untuk', 'pada', 'dengan', 'running', 'caused'].includes(term)
+                );
+
+                if (cveMatch || keywordMatch) {
+                    warnings.push({
+                        rule_type: g.rule_type,
+                        message: g.description
+                    });
+                }
+            }
+        } catch (err) {
+            logger.warn('Guardrail warning check failed', { error: err.message });
+        }
+
+        // Build Compact Forensic Metadata (no UUID bloat)
         const forensicMeta = await getForensicMeta(tenantId, projectId);
 
         // Write audit log
         await writeAuditLog(traceId, 'memory_search', params, {
             result_count: results.length,
             top_ids: results.slice(0, 3).map(r => r.id),
-            search_mode: searchMeta.mode,
-            excluded_count: excludedItems.length
+            search_mode: searchMeta.mode
         }, projectId, tenantId);
 
         // MULTI-HOP REASONING (v3.0)
@@ -249,13 +283,20 @@ export async function execute(params) {
             }
         }
 
-        return {
+        const response = {
             results,
             meta: {
                 trace_id: traceId,
                 count: results.length
             }
         };
+
+        // Inject warnings ONLY if found — does not pollute clean results
+        if (warnings.length > 0) {
+            response.warnings = warnings;
+        }
+
+        return response;
 
     } catch (err) {
         logger.error('memory_search error', { error: err.message, trace_id: traceId });

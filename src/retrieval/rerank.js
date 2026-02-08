@@ -35,11 +35,11 @@ export function rerank(results, query, options = {}) {
             score *= Math.max(0.5, 1 - (result.error_count * 0.1));
         }
 
-        // Boost based on usefulness signal
+        // Boost based on usefulness signal (v3.0: amplified for success/fail differentiation)
         if (result.usefulness_score > 0) {
-            score *= (1 + Math.min(0.2, result.usefulness_score * 0.05));
+            score *= (1 + Math.min(0.5, result.usefulness_score * 0.2));
         } else if (result.usefulness_score < 0) {
-            score *= Math.max(0.8, 1 + result.usefulness_score * 0.05);
+            score *= Math.max(0.6, 1 + result.usefulness_score * 0.1);
         }
 
         // Title match bonus

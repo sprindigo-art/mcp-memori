@@ -1,13 +1,15 @@
 /**
- * memory.feedback - Provide feedback on memory items
+ * memory.feedback - Feedback pada memori
+ * v4.0 - Cache invalidation on feedback
  * @module mcp/tools/memory.feedback
  */
 import { query, queryOne } from '../../db/index.js';
-import { recordMistake } from '../../governance/loopbreaker.js';
 import { now } from '../../utils/time.js';
 import { v4 as uuidv4 } from 'uuid';
 import logger from '../../utils/logger.js';
-import { getForensicMeta } from '../../utils/forensic.js';
+import { getMinimalForensicMeta } from '../../utils/forensic.js';
+import { recordMistake } from '../../governance/loopbreaker.js';
+import { invalidateCache } from '../../utils/cache.js';
 
 /**
  * Tool definition for MCP
@@ -116,6 +118,9 @@ export async function execute(params) {
             ]
         );
 
+        // Invalidate cache after feedback update
+        invalidateCache(id);
+
         // Write audit log
         await writeAuditLog(traceId, 'memory_feedback',
             { id, label, notes },
@@ -135,8 +140,8 @@ export async function execute(params) {
             tenantId
         );
 
-        // Build Forensic Metadata
-        const forensicMeta = await getForensicMeta(tenantId, item.project_id);
+        // Build Minimal Forensic Metadata
+        const forensicMeta = getMinimalForensicMeta(tenantId, item.project_id);
 
         return {
             ok: true,
