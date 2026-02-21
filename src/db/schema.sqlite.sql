@@ -73,6 +73,24 @@ CREATE TABLE IF NOT EXISTS mistakes (
     UNIQUE(tenant_id, project_id, signature)
 );
 
+-- Version history for rollback protection
+CREATE TABLE IF NOT EXISTS memory_items_history (
+    history_id TEXT PRIMARY KEY,
+    item_id TEXT NOT NULL,
+    version INTEGER NOT NULL,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    tags TEXT,
+    content_hash TEXT,
+    usefulness_score REAL,
+    updated_at TEXT,
+    saved_at TEXT DEFAULT (datetime('now')),
+    reason TEXT DEFAULT 'pre_update'
+);
+
+CREATE INDEX IF NOT EXISTS idx_history_item ON memory_items_history(item_id);
+CREATE INDEX IF NOT EXISTS idx_history_saved ON memory_items_history(saved_at DESC);
+
 -- Regular indexes
 CREATE INDEX IF NOT EXISTS idx_memory_items_project ON memory_items(project_id);
 CREATE INDEX IF NOT EXISTS idx_memory_items_tenant_project ON memory_items(tenant_id, project_id);
@@ -91,31 +109,32 @@ CREATE INDEX IF NOT EXISTS idx_memory_links_to ON memory_links(to_id);
 CREATE INDEX IF NOT EXISTS idx_mistakes_project ON mistakes(project_id);
 CREATE INDEX IF NOT EXISTS idx_mistakes_signature ON mistakes(signature);
 
--- FTS5 virtual table for full-text search
+-- FTS5 virtual table for full-text search (standalone, no content-sync)
+-- Standalone FTS gives full control over indexed content
+-- Only active items are indexed; deleted/quarantined are excluded
 CREATE VIRTUAL TABLE IF NOT EXISTS memory_items_fts USING fts5(
-    id,
+    id UNINDEXED,
     title,
-    content,
-    content='memory_items',
-    content_rowid='rowid'
+    content
 );
 
--- Triggers to keep FTS in sync
-CREATE TRIGGER IF NOT EXISTS memory_items_ai AFTER INSERT ON memory_items BEGIN
-    INSERT INTO memory_items_fts(rowid, id, title, content) 
-    VALUES (NEW.rowid, NEW.id, NEW.title, NEW.content);
+-- Triggers to keep FTS in sync (status-aware)
+CREATE TRIGGER IF NOT EXISTS memory_items_ai AFTER INSERT ON memory_items
+WHEN NEW.status = 'active'
+BEGIN
+    INSERT INTO memory_items_fts(id, title, content) 
+    VALUES (NEW.id, NEW.title, NEW.content);
 END;
 
 CREATE TRIGGER IF NOT EXISTS memory_items_ad AFTER DELETE ON memory_items BEGIN
-    INSERT INTO memory_items_fts(memory_items_fts, rowid, id, title, content) 
-    VALUES('delete', OLD.rowid, OLD.id, OLD.title, OLD.content);
+    DELETE FROM memory_items_fts WHERE id = OLD.id;
 END;
 
 CREATE TRIGGER IF NOT EXISTS memory_items_au AFTER UPDATE ON memory_items BEGIN
-    INSERT INTO memory_items_fts(memory_items_fts, rowid, id, title, content) 
-    VALUES('delete', OLD.rowid, OLD.id, OLD.title, OLD.content);
-    INSERT INTO memory_items_fts(rowid, id, title, content) 
-    VALUES (NEW.rowid, NEW.id, NEW.title, NEW.content);
+    DELETE FROM memory_items_fts WHERE id = OLD.id;
+    INSERT INTO memory_items_fts(id, title, content) 
+    SELECT NEW.id, NEW.title, NEW.content
+    WHERE NEW.status = 'active';
 END;
 
 -- Trigger for updated_at

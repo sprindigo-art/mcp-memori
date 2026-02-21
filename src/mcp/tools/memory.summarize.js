@@ -179,7 +179,7 @@ export async function execute(params) {
             id: p.id,
             title: p.title,
             content: p.content,
-            tags: typeof p.tags === 'string' ? JSON.parse(p.tags) : p.tags,
+            tags: typeof p.tags === 'string' ? (() => { try { return JSON.parse(p.tags); } catch { return []; } })() : (p.tags || []),
             updated_at: p.updated_at
         }));
 

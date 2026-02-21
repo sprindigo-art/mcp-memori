@@ -10,6 +10,8 @@ import logger from '../../utils/logger.js';
 import { getMinimalForensicMeta } from '../../utils/forensic.js';
 import { recordMistake } from '../../governance/loopbreaker.js';
 import { invalidateCache } from '../../utils/cache.js';
+import { DEFAULT_POLICY } from '../../governance/policyEngine.js';
+import { withLock } from '../../concurrency/lock.js';
 
 /**
  * Tool definition for MCP
@@ -43,62 +45,63 @@ export async function execute(params) {
     const { id, label, notes = '', tenant_id: tenantId = 'local-user' } = params;
 
     try {
-        // Get current item
-        const item = await queryOne(
-            `SELECT id, project_id, title, usefulness_score, error_count, status, verified
+        // Lock entire read-modify-write cycle to prevent lost updates
+        return await withLock(`feedback:${id}`, async () => {
+            // Get current item
+            const item = await queryOne(
+                `SELECT id, project_id, title, usefulness_score, error_count, status, verified
        FROM memory_items WHERE id = ?`,
-            [id]
-        );
+                [id]
+            );
 
-        if (!item) {
-            return {
-                ok: false,
-                updated: null,
-                meta: { trace_id: traceId, error: 'Item not found' }
-            };
-        }
+            if (!item) {
+                return {
+                    ok: false,
+                    updated: null,
+                    meta: { trace_id: traceId, error: 'Item not found' }
+                };
+            }
 
-        let newUsefulnessScore = item.usefulness_score;
-        let newErrorCount = item.error_count;
-        let newStatus = item.status;
-        let newVerified = item.verified;
+            let newUsefulnessScore = item.usefulness_score;
+            let newErrorCount = item.error_count;
+            let newStatus = item.status;
+            let newVerified = item.verified;
 
-        switch (label) {
-            case 'useful':
-                // Boost usefulness score
-                newUsefulnessScore += 1;
-                break;
+            switch (label) {
+                case 'useful':
+                    // Boost usefulness score
+                    newUsefulnessScore += 1;
+                    break;
 
-            case 'not_relevant':
-                // Decrease usefulness score
-                newUsefulnessScore -= 0.5;
-                break;
+                case 'not_relevant':
+                    // Decrease usefulness score
+                    newUsefulnessScore -= 0.5;
+                    break;
 
-            case 'wrong':
-                // Increment error count, unverify, potentially quarantine
-                newErrorCount += 1;
-                newVerified = 0;
+                case 'wrong':
+                    // Increment error count, unverify, potentially quarantine
+                    newErrorCount += 1;
+                    newVerified = 0;
 
-                // Quarantine if error count reaches policy threshold (NOT on first wrong!)
-                const QUARANTINE_THRESHOLD = 3; // Must match DEFAULT_POLICY.quarantine_on_wrong_threshold
-                if (newErrorCount >= QUARANTINE_THRESHOLD) {
-                    newStatus = 'quarantined';
-                }
+                    // Quarantine if error count reaches policy threshold (NOT on first wrong!)
+                    if (newErrorCount >= DEFAULT_POLICY.quarantine_on_wrong_threshold) {
+                        newStatus = 'quarantined';
+                    }
 
-                // Record mistake for loop breaker
-                await recordMistake({
-                    projectId: item.project_id,
-                    tenantId,
-                    signature: `wrong:${item.title}:${id}`,
-                    severity: newErrorCount >= 2 ? 'high' : 'medium',
-                    notes: notes || `Marked as wrong. Error count: ${newErrorCount}`
-                });
-                break;
-        }
+                    // Record mistake for loop breaker
+                    await recordMistake({
+                        projectId: item.project_id,
+                        tenantId,
+                        signature: `wrong:${item.title}:${id}`,
+                        severity: newErrorCount >= 2 ? 'high' : 'medium',
+                        notes: notes || `Marked as wrong. Error count: ${newErrorCount}`
+                    });
+                    break;
+            }
 
-        // Update item
-        await query(
-            `UPDATE memory_items SET 
+            // Update item
+            await query(
+                `UPDATE memory_items SET 
        usefulness_score = ?,
        error_count = ?,
        status = ?,
@@ -106,61 +109,63 @@ export async function execute(params) {
        status_reason = CASE WHEN ? != status THEN ? ELSE status_reason END,
        updated_at = ?
        WHERE id = ?`,
-            [
-                newUsefulnessScore,
-                newErrorCount,
-                newStatus,
-                newVerified,
-                newStatus,
-                `Feedback: ${label}. ${notes}`,
-                now(),
-                id
-            ]
-        );
+                [
+                    newUsefulnessScore,
+                    newErrorCount,
+                    newStatus,
+                    newVerified,
+                    newStatus,
+                    `Feedback: ${label}. ${notes}`,
+                    now(),
+                    id
+                ]
+            );
 
-        // Invalidate cache after feedback update
-        invalidateCache(id);
+            // Invalidate cache after feedback update
+            invalidateCache(id);
 
-        // Write audit log
-        await writeAuditLog(traceId, 'memory_feedback',
-            { id, label, notes },
-            {
+            // Write audit log
+            await writeAuditLog(traceId, 'memory_feedback',
+                { id, label, notes },
+                {
+                    previous: {
+                        usefulness_score: item.usefulness_score,
+                        error_count: item.error_count,
+                        status: item.status
+                    },
+                    updated: {
+                        usefulness_score: newUsefulnessScore,
+                        error_count: newErrorCount,
+                        status: newStatus
+                    }
+                },
+                item.project_id,
+                tenantId
+            );
+
+            // Build Minimal Forensic Metadata
+            const forensicMeta = getMinimalForensicMeta(tenantId, item.project_id);
+
+            return {
+                ok: true,
                 previous: {
-                    usefulness_score: item.usefulness_score,
+                    status: item.status,
                     error_count: item.error_count,
-                    status: item.status
+                    usefulness: item.usefulness_score
                 },
                 updated: {
+                    id,
                     usefulness_score: newUsefulnessScore,
                     error_count: newErrorCount,
                     status: newStatus
+                },
+                meta: {
+                    trace_id: traceId,
+                    forensic: forensicMeta
                 }
-            },
-            item.project_id,
-            tenantId
-        );
+            };
 
-        // Build Minimal Forensic Metadata
-        const forensicMeta = getMinimalForensicMeta(tenantId, item.project_id);
-
-        return {
-            ok: true,
-            previous: {
-                status: item.status,
-                error_count: item.error_count,
-                usefulness: item.usefulness_score
-            },
-            updated: {
-                id,
-                usefulness_score: newUsefulnessScore,
-                error_count: newErrorCount,
-                status: newStatus
-            },
-            meta: {
-                trace_id: traceId,
-                forensic: forensicMeta
-            }
-        };
+        }); // end withLock
 
     } catch (err) {
         logger.error('memory.feedback error', { error: err.message, trace_id: traceId });

@@ -10,20 +10,12 @@ import config from './config.js';
 
 // Lazy imports to avoid circular dependencies
 let guardrailsModule = null;
-let crossModelModule = null;
 
 async function getGuardrailsModule() {
     if (!guardrailsModule) {
         guardrailsModule = await import('../governance/guardrails.js');
     }
     return guardrailsModule;
-}
-
-async function getCrossModelModule() {
-    if (!crossModelModule) {
-        crossModelModule = await import('../governance/crossModel.js');
-    }
-    return crossModelModule;
 }
 
 /**
@@ -65,15 +57,21 @@ export async function getForensicMeta(tenantId, projectId) {
         } catch { /* guardrails table may not exist */ }
     } catch { /* ignore count errors */ }
 
-    // Cross-model: only count, NO model list
+    // Cross-model: lightweight inline query (crossModel.js dependency removed - was dead code)
     let modelCount = 0;
     let pendingConflicts = 0;
     try {
-        const crossModelMod = await getCrossModelModule();
-        const summary = await crossModelMod.getCrossModelSummary(projectId, tenantId);
-        modelCount = summary.model_count || 0;
-        pendingConflicts = summary.pending_conflicts || 0;
-    } catch { /* ignore */ }
+        const mcRes = await query(
+            `SELECT COUNT(DISTINCT model_id) as cnt FROM model_conflicts WHERE project_id = ?`,
+            [projectId]
+        );
+        modelCount = mcRes[0]?.cnt || 0;
+        const pcRes = await query(
+            `SELECT COUNT(*) as cnt FROM model_conflicts WHERE project_id = ? AND resolution IS NULL`,
+            [projectId]
+        );
+        pendingConflicts = pcRes[0]?.cnt || 0;
+    } catch { /* model_conflicts table may not exist */ }
 
     return {
         db_backend: dbBackend,
@@ -186,12 +184,24 @@ async function getGovernanceSnapshot(tenantId, projectId) {
 }
 
 /**
- * Get cross-model summary - LAYER 5
+ * Get cross-model summary - LAYER 5 (lightweight inline, crossModel.js dependency removed)
  */
 async function getCrossModelSummary(tenantId, projectId) {
     try {
-        const crossModelMod = await getCrossModelModule();
-        return await crossModelMod.getCrossModelSummary(projectId, tenantId);
+        const modelsRes = await query(
+            `SELECT DISTINCT model_id FROM model_conflicts WHERE project_id = ?`,
+            [projectId]
+        );
+        const pendingRes = await query(
+            `SELECT COUNT(*) as cnt FROM model_conflicts WHERE project_id = ? AND resolution IS NULL`,
+            [projectId]
+        );
+        return {
+            models_detected: modelsRes.map(r => r.model_id),
+            model_count: modelsRes.length,
+            pending_conflicts: pendingRes[0]?.cnt || 0,
+            cross_model_active: modelsRes.length > 1
+        };
     } catch (e) {
         // Cross-model table might not exist yet
         return {

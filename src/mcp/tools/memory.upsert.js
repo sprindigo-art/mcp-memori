@@ -9,7 +9,7 @@ import { retry, isRetryableError } from '../../concurrency/retry.js';
 import { checkIdempotency } from '../../concurrency/idempotency.js';
 import { contentHash, idempotencyHash } from '../../utils/hash.js';
 import { generateEmbedding, isEmbeddingAvailable } from '../../utils/embedding.js';
-import { normalizeTags } from '../../utils/normalize.js';
+import { normalizeTags, extractKeywords } from '../../utils/normalize.js';
 import { now } from '../../utils/time.js';
 import { v4 as uuidv4 } from 'uuid';
 import logger from '../../utils/logger.js';
@@ -241,7 +241,7 @@ export async function execute(params) {
             );
             const counter = await queryOne(`SELECT value FROM system_state WHERE key = 'upsert_count'`);
             const count = parseInt(counter?.value || '0', 10);
-            if (count > 0 && count % 20 === 0) {
+            if (count > 0 && count % 50 === 0) {
                 maintenanceWarning = `[SYSTEM] Maintenance recommended (${count} upserts since last clean). Run memory_maintain with actions=["dedup","clean_links","auto_guardrails"] now.`;
                 logger.info('Maintenance counter triggered', { count });
             }
@@ -346,6 +346,18 @@ async function upsertItem(item, tenantId, traceId) {
             );
 
             if (titleMatch) {
+                // HISTORY BACKUP: Save current version before overwrite (rollback protection)
+                try {
+                    await query(
+                        `INSERT INTO memory_items_history (history_id, item_id, version, title, content, tags, content_hash, usefulness_score, updated_at, reason)
+                         SELECT ?, id, version, title, content, tags, content_hash, usefulness_score, updated_at, 'title_match_update'
+                         FROM memory_items WHERE id = ?`,
+                        [uuidv4(), titleMatch.id]
+                    );
+                } catch (histErr) {
+                    logger.warn('History backup failed', { error: histErr.message, id: titleMatch.id });
+                }
+
                 // Regenerate embedding for new content
                 let newEmbedding = null;
                 try {
@@ -454,6 +466,136 @@ async function upsertItem(item, tenantId, traceId) {
                     status: updated.status,
                     action: 'content_updated',
                     previous_content_hash: titleMatch.content_hash
+                };
+            }
+
+            // FUZZY TITLE MATCHING v5.1: Fallback when exact title doesn't match
+            // Solves the "99.6% items v1" problem — AI rarely writes identical titles
+            // Uses keyword overlap (Jaccard >= 0.6) to find similar items
+            const fuzzyMatch = await findFuzzyTitleMatch(item, projectId, tenantId);
+            if (fuzzyMatch) {
+                // Regenerate embedding for new content
+                let newEmbedding = null;
+                try {
+                    if (await isEmbeddingAvailable()) {
+                        const textToEmbed = buildFrontLoadedEmbeddingInput(item);
+                        const embResult = await generateEmbedding(textToEmbed);
+                        if (embResult?.embedding) {
+                            newEmbedding = embResult.embedding;
+                        }
+                    }
+                } catch (err) {
+                    logger.warn('Embedding regen failed on fuzzy update', { error: err.message });
+                }
+
+                // MERGE TAGS: Preserve protected tags from old item
+                const oldTags = typeof fuzzyMatch.tags === 'string'
+                    ? JSON.parse(fuzzyMatch.tags || '[]')
+                    : (fuzzyMatch.tags || []);
+                const newTags = normalizeTags(item.tags);
+                const PROTECTED_TAG_LIST = [
+                    'critical', 'operational', 'persistence', 'credential',
+                    'infrastructure', 'verified', 'access', 'exploit',
+                    'root', 'tunnel', 'ssh', 'webshell', 'technique', 'shell', 'backdoor'
+                ];
+                const protectedFromOld = oldTags.filter(t =>
+                    PROTECTED_TAG_LIST.includes(t.toLowerCase()) && !newTags.includes(t)
+                );
+                const mergedTags = [...newTags, ...protectedFromOld];
+
+                // HISTORY BACKUP: Save current version before overwrite (rollback protection)
+                try {
+                    await query(
+                        `INSERT INTO memory_items_history (history_id, item_id, version, title, content, tags, content_hash, usefulness_score, updated_at, reason)
+                         SELECT ?, id, version, title, content, tags, content_hash, usefulness_score, updated_at, ?
+                         FROM memory_items WHERE id = ?`,
+                        [uuidv4(), `fuzzy_update:overlap=${fuzzyMatch._overlap?.toFixed(2)}`, fuzzyMatch.id]
+                    );
+                } catch (histErr) {
+                    logger.warn('History backup failed', { error: histErr.message, id: fuzzyMatch.id });
+                }
+
+                // Build update — update title too (since it's slightly different)
+                const updateFields = [
+                    'title = ?', 'content = ?', 'content_hash = ?', 'tags = ?',
+                    'verified = ?', 'confidence = ?', 'provenance_json = ?',
+                    'version = version + 1', 'updated_at = ?'
+                ];
+                const updateValues = [
+                    item.title, item.content, hash,
+                    JSON.stringify(mergedTags),
+                    item.verified ? 1 : 0,
+                    item.confidence || 0.5,
+                    JSON.stringify(item.provenance_json || {}),
+                    now()
+                ];
+
+                // Preserve usefulness_score: keep higher of old vs base score
+                if (item.success === true) {
+                    updateFields.push('usefulness_score = MAX(usefulness_score, usefulness_score + 0.5)');
+                } else if (item.success === false) {
+                    updateFields.push('usefulness_score = MAX(usefulness_score - 0.5, -5.0)');
+                }
+                // If success not specified, preserve existing score (no change)
+
+                if (newEmbedding) {
+                    updateFields.push('embedding = ?');
+                    updateValues.push(JSON.stringify(newEmbedding));
+                }
+
+                updateValues.push(fuzzyMatch.id);
+
+                await query(
+                    `UPDATE memory_items SET ${updateFields.join(', ')} WHERE id = ?`,
+                    updateValues
+                );
+
+                // Refresh knowledge graph links
+                try {
+                    const suggestions = await suggestRelations(fuzzyMatch.id, projectId, tenantId);
+                    for (const suggestion of suggestions.slice(0, 3)) {
+                        if (suggestion.confidence >= 0.4) {
+                            try {
+                                await addRelation({
+                                    fromId: fuzzyMatch.id,
+                                    toId: suggestion.toId,
+                                    relation: suggestion.suggestedRelation,
+                                    weight: suggestion.confidence,
+                                    metadata: { auto_created: true, source: 'fuzzy_title_relink' }
+                                });
+                            } catch (linkErr) {
+                                logger.debug('Fuzzy re-link failed', { error: linkErr.message });
+                            }
+                        }
+                    }
+                } catch (autoLinkErr) {
+                    logger.debug('Fuzzy auto-relinking skipped', { error: autoLinkErr.message });
+                }
+
+                const updated = await queryOne(
+                    `SELECT version, status FROM memory_items WHERE id = ?`,
+                    [fuzzyMatch.id]
+                );
+
+                logger.info('Fuzzy title match update', {
+                    id: fuzzyMatch.id,
+                    old_title: fuzzyMatch.title,
+                    new_title: item.title,
+                    overlap: fuzzyMatch._overlap,
+                    old_version: fuzzyMatch.version,
+                    new_version: updated.version,
+                    trace_id: traceId
+                });
+
+                invalidateCache(fuzzyMatch.id);
+
+                return {
+                    id: fuzzyMatch.id,
+                    version: updated.version,
+                    status: updated.status,
+                    action: 'fuzzy_updated',
+                    matched_title: fuzzyMatch.title,
+                    overlap_score: fuzzyMatch._overlap
                 };
             }
 
@@ -629,6 +771,126 @@ function buildFrontLoadedEmbeddingInput(item) {
     parts.push(content.substring(0, 800));
 
     return parts.join(' | ');
+}
+
+/**
+ * Find a fuzzy title match for update instead of creating duplicates
+ * v5.1: Solves the "99.6% items v1" problem
+ * 
+ * Strategy:
+ * 1. Extract keywords from new title
+ * 2. Search recent items with same type+project
+ * 3. Calculate Jaccard keyword overlap
+ * 4. Return match only if ONE strong candidate (>= 60% overlap)
+ * 5. If ambiguous (multiple candidates >= 60%), return null (create new = safe default)
+ * 
+ * @param {object} item - New item being upserted
+ * @param {string} projectId 
+ * @param {string} tenantId 
+ * @returns {object|null} - Matching item or null
+ */
+async function findFuzzyTitleMatch(item, projectId, tenantId) {
+    const newKeywords = extractKeywords(item.title);
+
+    // Need at least 2 keywords for meaningful comparison
+    if (newKeywords.length < 2) return null;
+
+    let candidates = [];
+
+    // STRATEGY 1: Use FTS to find candidates based on title keywords (more targeted, no time limit)
+    try {
+        const ftsQuery = newKeywords.slice(0, 5).map(k => `"${k}"*`).join(' OR ');
+        const ftsResults = await query(
+            `SELECT m.id, m.title, m.version, m.content_hash, m.tags, m.usefulness_score
+             FROM memory_items_fts fts
+             JOIN memory_items m ON fts.id = m.id
+             WHERE memory_items_fts MATCH ?
+               AND m.type = ? AND m.project_id = ? AND m.tenant_id = ? AND m.status = 'active'
+             LIMIT 100`,
+            [ftsQuery, item.type, projectId, tenantId]
+        );
+        if (ftsResults && ftsResults.length > 0) {
+            candidates = ftsResults;
+        }
+    } catch (ftsErr) {
+        logger.debug('FTS fuzzy search failed, falling back to recent items', { error: ftsErr.message });
+    }
+
+    // STRATEGY 2: Fallback to recent items if FTS found nothing (covers FTS desync)
+    if (candidates.length === 0) {
+        candidates = await query(
+            `SELECT id, title, version, content_hash, tags, usefulness_score FROM memory_items 
+             WHERE type = ? AND project_id = ? AND tenant_id = ? AND status = 'active'
+             ORDER BY updated_at DESC LIMIT 50`,
+            [item.type, projectId, tenantId]
+        );
+    }
+
+    if (!candidates || candidates.length === 0) return null;
+
+    // SAFEGUARD: Extract success/failure status from titles
+    // Prevent merging [FAILED] with [SUCCESS] items
+    const newTitleLower = item.title.toLowerCase();
+    const newIsFailure = newTitleLower.includes('[failed]') || newTitleLower.includes('[guardrail]') || newTitleLower.includes('[blocked]');
+    const newIsSuccess = newTitleLower.includes('[success]') || newTitleLower.includes('[achieved]');
+
+    let bestMatch = null;
+    let bestOverlap = 0;
+    let secondBestOverlap = 0;
+
+    for (const candidate of candidates) {
+        const candidateKeywords = extractKeywords(candidate.title);
+        if (candidateKeywords.length < 2) continue;
+
+        // SAFEGUARD: Skip if success/failure status differs
+        const candTitleLower = candidate.title.toLowerCase();
+        const candIsFailure = candTitleLower.includes('[failed]') || candTitleLower.includes('[guardrail]') || candTitleLower.includes('[blocked]');
+        const candIsSuccess = candTitleLower.includes('[success]') || candTitleLower.includes('[achieved]');
+        if ((newIsFailure && candIsSuccess) || (newIsSuccess && candIsFailure)) {
+            continue; // Different outcome status = different items
+        }
+
+        // Calculate Jaccard similarity: intersection / union
+        const intersection = newKeywords.filter(k => candidateKeywords.includes(k));
+        const unionSet = new Set([...newKeywords, ...candidateKeywords]);
+        const overlap = intersection.length / unionSet.size;
+
+        if (overlap > bestOverlap) {
+            secondBestOverlap = bestOverlap;
+            bestOverlap = overlap;
+            bestMatch = { ...candidate, _overlap: overlap };
+        } else if (overlap > secondBestOverlap) {
+            secondBestOverlap = overlap;
+        }
+    }
+
+    // SAFETY CHECKS:
+    // 1. Best match must be >= 60% overlap
+    if (!bestMatch || bestOverlap < 0.6) return null;
+
+    // 2. If second-best is also >= 55%, it's AMBIGUOUS — don't update
+    //    This prevents wrong matches when multiple similar items exist
+    if (secondBestOverlap >= 0.55) {
+        logger.debug('Fuzzy match ambiguous, creating new item', {
+            best: bestOverlap.toFixed(2),
+            second: secondBestOverlap.toFixed(2),
+            title: item.title
+        });
+        return null;
+    }
+
+    // 3. Must not be exact same content (that's handled by contentHash check already)
+    const newHash = contentHash(item.content);
+    if (bestMatch.content_hash === newHash) return null;
+
+    logger.info('Fuzzy title match found', {
+        new_title: item.title,
+        matched_title: bestMatch.title,
+        overlap: bestOverlap.toFixed(2),
+        matched_id: bestMatch.id
+    });
+
+    return bestMatch;
 }
 
 export default { definition, execute };

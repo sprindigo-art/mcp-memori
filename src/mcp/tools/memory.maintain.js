@@ -23,7 +23,7 @@ import { getForensicMeta } from '../../utils/forensic.js'; // now compact by def
  */
 export const definition = {
     name: 'memory_maintain',
-    description: 'Maintenance: dedup, conflict, prune, compact, loopbreak, clean_links, auto_guardrails, archive, consolidate',
+    description: 'Maintenance: dedup, conflict, prune, compact, loopbreak, clean_links, auto_guardrails, archive, consolidate, rebuild_fts, wal_checkpoint, vacuum',
     inputSchema: {
         type: 'object',
         properties: {
@@ -36,7 +36,7 @@ export const definition = {
             actions: {
                 type: 'array',
                 items: { type: 'string' },
-                description: 'Actions: dedup, conflict, prune, compact, loopbreak, clean_links, auto_guardrails, archive, consolidate'
+                description: 'Actions: dedup, conflict, prune, compact, loopbreak, clean_links, auto_guardrails, archive, consolidate, rebuild_fts, wal_checkpoint, vacuum'
             },
             policy: {
                 type: 'object',
@@ -416,6 +416,180 @@ export async function execute(params) {
                         size: c.length,
                         sample_titles: c.slice(0, 3).map(e => e.title)
                     }))
+                };
+            }
+
+            // 10. Audit Log Rotation (v5.2) — prevent unbounded growth
+            if (actions.includes('audit_trim')) {
+                logger.debug('Running audit_trim', { projectId, dryRun });
+
+                const MAX_AUDIT_ENTRIES = 5000;
+                const countResult = await query(`SELECT COUNT(*) as cnt FROM audit_log`);
+                const totalAudit = countResult[0]?.cnt || 0;
+
+                let trimmed = 0;
+                if (totalAudit > MAX_AUDIT_ENTRIES) {
+                    const excess = totalAudit - MAX_AUDIT_ENTRIES;
+                    if (!dryRun) {
+                        await query(
+                            `DELETE FROM audit_log WHERE id IN (
+                                SELECT id FROM audit_log ORDER BY ts ASC LIMIT ?
+                            )`,
+                            [excess]
+                        );
+                    }
+                    trimmed = excess;
+                }
+
+                result.actions_planned_or_done.audit_trim = {
+                    total_before: totalAudit,
+                    trimmed,
+                    remaining: totalAudit - trimmed,
+                    max_allowed: MAX_AUDIT_ENTRIES
+                };
+            }
+
+            // 11. Cross-Type Overlap Detection (v5.2) — find STATE vs FACT duplicates
+            if (actions.includes('cross_type_overlap')) {
+                logger.debug('Running cross_type_overlap', { projectId, dryRun });
+
+                // Get recent active items for overlap check (limit scope for performance)
+                const candidates = await query(
+                    `SELECT id, title, type, tags, updated_at FROM memory_items 
+                     WHERE tenant_id = ? AND project_id = ? AND status = 'active'
+                     AND type IN ('fact', 'state')
+                     ORDER BY updated_at DESC LIMIT 200`,
+                    [tenantId, projectId]
+                );
+
+                const overlaps = [];
+                const checked = new Set();
+
+                for (let i = 0; i < candidates.length; i++) {
+                    if (checked.has(candidates[i].id)) continue;
+                    const titleI = (candidates[i].title || '').toLowerCase();
+                    const wordsI = titleI.split(/[\s\-_\[\]]+/).filter(w => w.length >= 3);
+                    const setI = new Set(wordsI);
+                    if (setI.size < 2) continue;
+
+                    for (let j = i + 1; j < candidates.length; j++) {
+                        if (checked.has(candidates[j].id)) continue;
+                        if (candidates[i].type === candidates[j].type) continue; // skip same-type (handled by regular dedup)
+
+                        const titleJ = (candidates[j].title || '').toLowerCase();
+                        const wordsJ = titleJ.split(/[\s\-_\[\]]+/).filter(w => w.length >= 3);
+                        const setJ = new Set(wordsJ);
+                        if (setJ.size < 2) continue;
+
+                        // Jaccard similarity on title words
+                        const intersection = [...setI].filter(w => setJ.has(w)).length;
+                        const union = new Set([...setI, ...setJ]).size;
+                        const jaccard = intersection / union;
+
+                        if (jaccard >= 0.55) {
+                            overlaps.push({
+                                id1: candidates[i].id,
+                                type1: candidates[i].type,
+                                title1: candidates[i].title,
+                                id2: candidates[j].id,
+                                type2: candidates[j].type,
+                                title2: candidates[j].title,
+                                overlap_score: Math.round(jaccard * 100) / 100
+                            });
+                            // Don't mark as checked — one item could overlap with multiple
+                        }
+                    }
+                }
+
+                result.actions_planned_or_done.cross_type_overlap = {
+                    scanned: candidates.length,
+                    overlaps_found: overlaps.length,
+                    overlaps: overlaps.slice(0, 20) // Cap output at 20
+                };
+            }
+
+            // 12. REBUILD FTS INDEX (v5.2) — fix ghost entries from deleted/quarantined items
+            if (actions.includes('rebuild_fts')) {
+                logger.debug('Running rebuild_fts', { projectId, dryRun });
+
+                let removed = 0;
+                let rebuilt = 0;
+
+                // Count current FTS entries vs active items
+                const ftsCount = await query(`SELECT COUNT(*) as cnt FROM memory_items_fts`);
+                const activeCount = await query(
+                    `SELECT COUNT(*) as cnt FROM memory_items WHERE status = 'active'`
+                );
+                const currentFts = ftsCount[0]?.cnt || 0;
+                const currentActive = activeCount[0]?.cnt || 0;
+                removed = Math.max(0, currentFts - currentActive);
+
+                if (!dryRun) {
+                    // Delete ALL FTS content
+                    await query(`DELETE FROM memory_items_fts`);
+
+                    // Re-insert only active items (standalone FTS: id, title, content)
+                    const activeItems = await query(
+                        `SELECT id, title, content FROM memory_items WHERE status = 'active'`
+                    );
+
+                    for (const item of activeItems) {
+                        await query(
+                            `INSERT INTO memory_items_fts(id, title, content) VALUES (?, ?, ?)`,
+                            [item.id, item.title, item.content]
+                        );
+                    }
+                    rebuilt = activeItems.length;
+                } else {
+                    rebuilt = currentActive;
+                }
+
+                result.actions_planned_or_done.rebuild_fts = {
+                    executed: !dryRun,
+                    ghost_entries_removed: removed,
+                    active_entries_rebuilt: rebuilt
+                };
+            }
+
+            // 13. WAL CHECKPOINT (v5.2) — reduce WAL file size
+            if (actions.includes('wal_checkpoint')) {
+                logger.debug('Running wal_checkpoint', { projectId, dryRun });
+
+                let walSize = 0;
+                if (!dryRun) {
+                    try {
+                        const result_wal = await query(`PRAGMA wal_checkpoint(TRUNCATE)`);
+                        walSize = result_wal[0]?.busy || 0;
+                    } catch (walErr) {
+                        logger.warn('WAL checkpoint failed', { error: walErr.message });
+                    }
+                }
+
+                result.actions_planned_or_done.wal_checkpoint = {
+                    executed: !dryRun,
+                    busy: walSize
+                };
+            }
+
+            // 14. VACUUM (v5.2) — reclaim disk space after deletions
+            if (actions.includes('vacuum')) {
+                logger.debug('Running vacuum', { projectId, dryRun });
+
+                let freed = 0;
+                if (!dryRun) {
+                    const beforeSize = await query(`SELECT page_count * page_size as size FROM pragma_page_count(), pragma_page_size()`);
+                    const beforeBytes = beforeSize[0]?.size || 0;
+                    await query(`VACUUM`);
+                    const afterSize = await query(`SELECT page_count * page_size as size FROM pragma_page_count(), pragma_page_size()`);
+                    const afterBytes = afterSize[0]?.size || 0;
+                    freed = Math.max(0, beforeBytes - afterBytes);
+                }
+
+                const freelistResult = await query(`PRAGMA freelist_count`);
+                result.actions_planned_or_done.vacuum = {
+                    executed: !dryRun,
+                    bytes_freed: freed,
+                    freelist_pages_remaining: freelistResult[0]?.freelist_count || 0
                 };
             }
 

@@ -144,7 +144,7 @@ export async function pruneOldEpisodes({ projectId, tenantId, keepLastN = 500, d
 
     // Get episodes ordered by creation date
     const episodes = await query(
-        `SELECT id, tags, verified, confidence FROM memory_items
+        `SELECT id, tags, verified, confidence, usefulness_score FROM memory_items
      WHERE tenant_id = ? AND project_id = ? AND type = 'episode' 
      AND status = 'active'
      ORDER BY created_at DESC`,

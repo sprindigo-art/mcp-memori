@@ -39,6 +39,8 @@ export const definition = {
                 description: 'Mandatory tags - results MUST contain ALL of these tags'
             },
             limit: { type: 'number', description: 'Max results (default: 10)' },
+            offset: { type: 'number', description: 'Offset for pagination (default: 0)' },
+            full_content: { type: 'boolean', description: 'Return full content instead of snippet (default: false)' },
             override_quarantine: { type: 'boolean', description: 'Include quarantined items (default: false)' },
             allow_relations: { type: 'boolean', description: 'Enable multi-hop graph reasoning (default: false)' }
         },
@@ -137,6 +139,8 @@ export async function execute(params) {
         tags = [],
         required_tags: requiredTags = [],
         limit = 50,
+        offset = 0,
+        full_content: fullContent = false,
         override_quarantine: overrideQuarantine = false,
         allow_relations: allowRelations = false
     } = params;
@@ -170,15 +174,15 @@ export async function execute(params) {
             });
         }
 
-        // Take top N after filtering
-        reranked = reranked.slice(0, limit);
+        // Apply offset + limit for pagination
+        const paginatedResults = reranked.slice(offset, offset + limit);
 
         // Format results - WITH SNIPPET + TAGS for immediate understanding
-        const results = reranked.map(item => ({
+        const results = paginatedResults.map(item => ({
             id: item.id,
             type: item.type,
             title: item.title,
-            snippet: generateSnippet(item.content || '', 150),
+            snippet: fullContent ? (item.content || '') : generateSnippet(item.content || '', 150),
             tags: (() => { try { return typeof item.tags === 'string' ? JSON.parse(item.tags || '[]') : (item.tags || []); } catch { return []; } })(),
             score: Math.round((item.final_score || item.score) * 1000) / 1000
         }));
@@ -283,8 +287,16 @@ export async function execute(params) {
             }
         }
 
+        const totalBeforePagination = reranked.length;
         const response = {
             results,
+            pagination: {
+                total: totalBeforePagination,
+                offset,
+                limit,
+                returned: results.length,
+                has_more: offset + limit < totalBeforePagination
+            },
             meta: {
                 trace_id: traceId,
                 count: results.length

@@ -8,7 +8,8 @@ import { v4 as uuidv4 } from 'uuid';
 import { now } from '../../utils/time.js';
 import logger from '../../utils/logger.js';
 import { getForensicMeta } from '../../utils/forensic.js';
-import { getFromCache, setToCache } from '../../utils/cache.js';
+import { getFromCache, setToCache, invalidateCache } from '../../utils/cache.js';
+import { withLock } from '../../concurrency/lock.js';
 
 /**
  * Tool definition for MCP
@@ -82,15 +83,16 @@ export async function execute(params) {
         );
 
         // Update last_used_at AND auto-increment usefulness_score (true interest signal)
-        // +0.01 per get (gradual), cap at 5.0 (max multiplier: 1.36x in ranking)
-        await query(
-            `UPDATE memory_items SET last_used_at = ?, usefulness_score = MIN(5.0, usefulness_score + 0.01) WHERE id = ?`,
-            [now(), id]
-        );
-
-        // Invalidate cache since score changed
-        const { invalidateCache } = await import('../../utils/cache.js');
-        invalidateCache(id);
+        // v5.1: +0.05 per get (was 0.01 — too slow, 84.3% items clustered 0-0.5)
+        // Cap 5.0 unchanged. Items differentiate after ~20 accesses instead of 100
+        await withLock(`get:${id}`, async () => {
+            await query(
+                `UPDATE memory_items SET last_used_at = ?, usefulness_score = MIN(5.0, usefulness_score + 0.05) WHERE id = ?`,
+                [now(), id]
+            );
+            // Invalidate cache since score changed
+            invalidateCache(id);
+        });
 
         // Write audit log
         await writeAuditLog(traceId, 'memory_get', { id }, {

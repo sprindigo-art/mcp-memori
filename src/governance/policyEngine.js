@@ -62,9 +62,14 @@ export function mergePolicy(userPolicy = {}) {
  */
 export function isProtectedItem(item) {
     // Parse tags if string
-    const itemTags = typeof item.tags === 'string'
-        ? JSON.parse(item.tags || '[]')
-        : (item.tags || []);
+    let itemTags;
+    try {
+        itemTags = typeof item.tags === 'string'
+            ? JSON.parse(item.tags || '[]')
+            : (item.tags || []);
+    } catch {
+        itemTags = [];
+    }
 
     // Check if any protected tag exists
     const hasProtectedTag = itemTags.some(tag =>
@@ -75,7 +80,10 @@ export function isProtectedItem(item) {
     const isVerified = item.verified === true || item.verified === 1;
     const isHighConfidence = (item.confidence || 0) >= 0.8;
 
-    return hasProtectedTag || isVerified || isHighConfidence;
+    // Check if item has been frequently used (high usefulness = valuable)
+    const isHighUsefulness = (item.usefulness_score || 0) >= 1.0;
+
+    return hasProtectedTag || isVerified || isHighConfidence || isHighUsefulness;
 }
 
 /**
