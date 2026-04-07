@@ -1,7 +1,7 @@
 {
   "name": "mcp-memori",
   "version": "1.0.0",
-  "description": "Production-grade MCP Memory Server dengan hybrid search, self-healing, dan concurrency-safe untuk multi-agent AI",
+  "description": "MCP Memory Server v7.0 — File-based .md Runbooks + Intelligence Layer (query expansion, reranking, fuzzy match, LRU cache, universal tracking)",
   "main": "src/server.js",
   "type": "module",
   "scripts": {

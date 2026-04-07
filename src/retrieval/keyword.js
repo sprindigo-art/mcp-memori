@@ -48,7 +48,10 @@ export async function keywordSearch(params) {
  * PostgreSQL full-text search
  */
 async function postgresSearch({ keywords, projectId, tenantId, types, tags, excludeStatus, limit }) {
-    const tsQuery = keywords.map(k => `${k}:*`).join(' | ');
+    // v5.3: AND for ≥3 keywords (precision), OR for 1-2 (recall)
+    const tsQuery = keywords.length >= 3
+        ? keywords.slice(0, 5).map(k => `${k}:*`).join(' & ')
+        : keywords.map(k => `${k}:*`).join(' | ');
 
     let sql = `
     SELECT 
@@ -95,60 +98,84 @@ async function postgresSearch({ keywords, projectId, tenantId, types, tags, excl
  * SQLite FTS5 search
  */
 async function sqliteSearch({ keywords, projectId, tenantId, types, tags, excludeStatus, limit, searchQuery }) {
-    // Build FTS5 query
-    const ftsQuery = keywords.map(k => `"${k}"*`).join(' OR ');
+    // v5.3: Smart FTS query — AND for ≥3 keywords (precision), OR for 1-2 (recall)
+    // AND with fallback: if AND returns <3 results, retry with OR to preserve recall
+    const useAnd = keywords.length >= 3;
+    const andKeywords = useAnd ? keywords.slice(0, 5) : keywords; // Cap AND at 5 to avoid over-restriction
+    const ftsQueryAnd = andKeywords.map(k => `"${k}"*`).join(' AND ');
+    const ftsQueryOr = keywords.map(k => `"${k}"*`).join(' OR ');
+    const ftsQuery = useAnd ? ftsQueryAnd : ftsQueryOr;
 
-    let sql = `
-    SELECT 
-      m.id, m.title, m.content, m.type, m.tags, m.status, m.verified, m.confidence, m.version, m.created_at, m.updated_at,
-      bm25(memory_items_fts) as score
-    FROM memory_items_fts fts
-    JOIN memory_items m ON fts.id = m.id
-    WHERE memory_items_fts MATCH ?
-      AND m.tenant_id = ? AND m.project_id = ?
-  `;
+    const buildSql = (matchQuery) => {
+        let sql = `
+        SELECT
+          m.id, m.title, m.content, m.type, m.tags, m.status, m.verified, m.confidence, m.version, m.created_at, m.updated_at,
+          bm25(memory_items_fts) as score
+        FROM memory_items_fts fts
+        JOIN memory_items m ON fts.id = m.id
+        WHERE memory_items_fts MATCH ?
+          AND m.tenant_id = ? AND m.project_id = ?
+      `;
 
-    const params = [ftsQuery, tenantId, projectId];
+        const p = [matchQuery, tenantId, projectId];
 
-    // Add status filter
-    const statusPlaceholders = excludeStatus.map(() => '?').join(',');
-    sql += ` AND m.status NOT IN (${statusPlaceholders})`;
-    params.push(...excludeStatus);
+        const statusPlaceholders = excludeStatus.map(() => '?').join(',');
+        sql += ` AND m.status NOT IN (${statusPlaceholders})`;
+        p.push(...excludeStatus);
 
-    if (types.length > 0) {
-        const typePlaceholders = types.map(() => '?').join(',');
-        sql += ` AND m.type IN (${typePlaceholders})`;
-        params.push(...types);
-    }
+        if (types.length > 0) {
+            const typePlaceholders = types.map(() => '?').join(',');
+            sql += ` AND m.type IN (${typePlaceholders})`;
+            p.push(...types);
+        }
 
-    if (tags.length > 0) {
-        // SQLite: check tags JSON array contains any of the specified tags
-        const tagConditions = tags.map(() => `m.tags LIKE ?`).join(' OR ');
-        sql += ` AND (${tagConditions})`;
-        params.push(...tags.map(t => `%"${t}"%`));
-    }
+        if (tags.length > 0) {
+            const tagConditions = tags.map(() => `m.tags LIKE ?`).join(' OR ');
+            sql += ` AND (${tagConditions})`;
+            p.push(...tags.map(t => `%"${t}"%`));
+        }
 
-    sql += ` ORDER BY score LIMIT ?`;
-    params.push(limit);
+        sql += ` ORDER BY score LIMIT ?`;
+        p.push(limit);
+
+        return { sql, params: p };
+    };
+
+    const mapRow = (row) => ({
+        id: row.id,
+        score: Math.abs(parseFloat(row.score) || 0),
+        title: row.title,
+        content: row.content,
+        type: row.type,
+        tags: row.tags,
+        status: row.status,
+        verified: row.verified,
+        confidence: row.confidence,
+        version: row.version,
+        created_at: row.created_at,
+        updated_at: row.updated_at
+    });
 
     try {
-        const rows = await query(sql, params);
-        return rows.map(row => ({
-            id: row.id,
-            score: Math.abs(parseFloat(row.score) || 0), // BM25 returns negative scores
-            title: row.title,
-            content: row.content,
-            type: row.type,
-            tags: row.tags,
-            status: row.status,
-            verified: row.verified,
-            confidence: row.confidence,
-            version: row.version,
-            created_at: row.created_at,
-            updated_at: row.updated_at
-        }));
+        // Primary query (AND for ≥3 keywords, OR for 1-2)
+        const primary = buildSql(ftsQuery);
+        const rows = await query(primary.sql, primary.params);
+        const results = rows.map(mapRow);
+
+        // v5.3: AND fallback — if AND returned <3 results, retry with OR for better recall
+        if (useAnd && results.length < 3) {
+            logger.info('FTS AND returned few results, falling back to OR', {
+                andResults: results.length,
+                keywords: keywords.length
+            });
+            const fallback = buildSql(ftsQueryOr);
+            const orRows = await query(fallback.sql, fallback.params);
+            return orRows.map(mapRow);
+        }
+
+        return results;
     } catch (err) {
-        // Fallback to LIKE search if FTS fails
+        // Fallback to LIKE search if FTS fails entirely
         logger.warn('FTS search failed, falling back to LIKE', { error: err.message });
         return likeSearch({ keywords, projectId, tenantId, types, tags, excludeStatus, limit });
     }

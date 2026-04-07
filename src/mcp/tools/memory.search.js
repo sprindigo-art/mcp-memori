@@ -1,360 +1,165 @@
 /**
- * memory.search v3.0 - Hybrid search with multi-hop reasoning
+ * memory.search v7.0 — File-based Runbook Search with Intelligence Layer
+ * Query expansion + reranking + target-tag boost + credential priority
  * @module mcp/tools/memory.search
  */
-import { hybridSearch } from '../../retrieval/hybridSearch.js';
-import { rerank, diversify } from '../../retrieval/rerank.js';
-import { getEmbeddingMode, getEmbeddingBackend } from '../../utils/embedding.js';
-import { getDbType, query } from '../../db/index.js';
-import { generateSnippet, normalizeTags } from '../../utils/normalize.js';
+import { searchRunbooks } from '../../storage/files.js';
 import { v4 as uuidv4 } from 'uuid';
-import { now } from '../../utils/time.js';
 import logger from '../../utils/logger.js';
-import { traverseGraph, getRelations } from '../../retrieval/graph.js';
 
 /**
- * Tool definition for MCP
+ * Common technique words excluded from target-tag boost
+ * These are NOT target identifiers (domains, hosts, services)
  */
+const COMMON_TECHNIQUE_WORDS = new Set([
+    'exploit', 'vulnerability', 'payload', 'attack', 'hack', 'shell', 'webshell',
+    'rce', 'xxe', 'sqli', 'xss', 'ssrf', 'lfi', 'rfi', 'ssti', 'idor', 'csrf',
+    'injection', 'bypass', 'brute', 'force', 'enum', 'enumeration', 'scan',
+    'credential', 'creds', 'password', 'tunnel', 'persistence', 'backdoor', 'reverse',
+    'ssh', 'rdp', 'ftp', 'http', 'https', 'mysql', 'redis', 'smb',
+    'port', 'proxy', 'socks', 'chisel', 'ngrok', 'cloudflare',
+    'recon', 'install', 'deploy', 'upload', 'download', 'exfil',
+    'access', 'login', 'connect', 'pivot', 'escalate', 'privesc', 'dump',
+    'failed', 'success', 'blocked', 'patched', 'active', 'gagal', 'berhasil',
+    'full', 'updated', 'server', 'target', 'host', 'domain', 'windows', 'linux',
+    'tier', 'phase', 'chain', 'teknik', 'technique', 'runbook', 'universal',
+    'root', 'admin', 'sudo', 'cve', 'poc', 'exploit'
+]);
+
+/**
+ * Rerank results with target-tag relevance boost
+ * @param {Array} results - Search results from searchRunbooks
+ * @param {string} originalQuery - Original user query (before expansion)
+ * @returns {Array} Reranked results
+ */
+function rerankResults(results, originalQuery) {
+    const queryWords = (originalQuery || '').toLowerCase().split(/\s+/).filter(w => w.length >= 2);
+    if (queryWords.length === 0) return results;
+
+    // v7.3: Dedup by ID — keep highest-scoring entry per file
+    const seen = new Map();
+    for (const item of results) {
+        const key = item.id || item.title;
+        if (!seen.has(key) || (item.score || 0) > (seen.get(key).score || 0)) {
+            seen.set(key, item);
+        }
+    }
+    results = [...seen.values()];
+
+    // Extract target keywords (domain-like, not common technique words)
+    const targetKeywords = queryWords.filter(k => !COMMON_TECHNIQUE_WORDS.has(k) && k.length >= 3);
+
+    return results.map(item => {
+        let score = item.score || 0;
+
+        // TARGET-TAG BOOST: Items with matching target tags get priority
+        if (targetKeywords.length > 0) {
+            const itemTags = (item.tags || []).map(t => (t || '').toLowerCase());
+            const tagMatches = targetKeywords.filter(tk => itemTags.some(t => t.includes(tk))).length;
+            if (tagMatches > 0) {
+                // 20% boost per matching target keyword, capped at 50%
+                const boost = Math.min(0.5, tagMatches * 0.2);
+                score *= (1 + boost);
+            }
+
+            // TITLE TARGET BOOST: Title containing target name gets extra priority
+            const titleLower = (item.title || '').toLowerCase();
+            const titleTargetMatches = targetKeywords.filter(tk => titleLower.includes(tk)).length;
+            if (titleTargetMatches > 0) {
+                score *= (1 + titleTargetMatches * 0.15);
+            }
+        }
+
+        // ERROR PENALTY: Items with known failures score lower
+        const snippetLower = (item.snippet || '').toLowerCase();
+        if (snippetLower.includes('gagal') || snippetLower.includes('failed') || snippetLower.includes('blocked')) {
+            // Only penalize if query is NOT specifically searching for failures
+            if (!queryWords.some(w => ['gagal', 'failed', 'error', 'blocked'].includes(w))) {
+                score *= 0.85;
+            }
+        }
+
+        return { ...item, score: Math.round(score * 100) / 100 };
+    }).sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score;
+        return (b.updated_at || '').localeCompare(a.updated_at || '');
+    });
+}
+
 export const definition = {
     name: 'memory_search',
-    description: 'Cari memori berdasarkan query dengan hybrid search (vector + keyword + recency)',
+    description: 'Cari runbook berdasarkan query dengan intelligent search (query expansion + reranking + target-tag boost)',
     inputSchema: {
         type: 'object',
         properties: {
             query: { type: 'string', description: 'Search query' },
             project_id: { type: 'string', description: 'Project ID' },
-            types: {
-                type: 'array',
-                items: { type: 'string' },
-                description: 'Filter by types: fact, state, decision, runbook, episode'
-            },
-            tags: {
-                type: 'array',
-                items: { type: 'string' },
-                description: 'Filter by tags'
-            },
-            required_tags: {
-                type: 'array',
-                items: { type: 'string' },
-                description: 'Mandatory tags - results MUST contain ALL of these tags'
-            },
-            limit: { type: 'number', description: 'Max results (default: 10)' },
+            tags: { type: 'array', items: { type: 'string' }, description: 'Filter by tags (OR logic)' },
+            required_tags: { type: 'array', items: { type: 'string' }, description: 'Mandatory tags (AND logic)' },
+            limit: { type: 'number', description: 'Max results (default: 20)' },
             offset: { type: 'number', description: 'Offset for pagination (default: 0)' },
             full_content: { type: 'boolean', description: 'Return full content instead of snippet (default: false)' },
-            override_quarantine: { type: 'boolean', description: 'Include quarantined items (default: false)' },
-            allow_relations: { type: 'boolean', description: 'Enable multi-hop graph reasoning (default: false)' }
+            scope_id: { type: 'string', description: 'Scope search to ONE specific runbook file' },
+            types: { type: 'array', items: { type: 'string' }, description: 'Ignored — all items are runbooks' },
+            override_quarantine: { type: 'boolean', description: 'Ignored — no quarantine in file mode' },
+            allow_relations: { type: 'boolean', description: 'Ignored — no graph in file mode' }
         },
         required: ['query', 'project_id']
     }
 };
 
-import { getForensicMeta } from '../../utils/forensic.js';
-
-/**
- * QUERY EXPANSION v1.0
- * Expand search query with synonyms for better recall
- * Focus on security/hacking domain terms
- */
-const QUERY_SYNONYMS = {
-    // Tunneling & Pivoting
-    'chisel': ['tunnel', 'proxy', 'pivot', 'forward', 'socks'],
-    'tunnel': ['chisel', 'proxy', 'ssh tunnel', 'port forward', 'pivot'],
-    'pivot': ['tunnel', 'lateral', 'proxy', 'chisel'],
-
-    // Shells & Access
-    'webshell': ['backdoor', 'shell', 'rce', 'persistence', 'upload'],
-    'backdoor': ['webshell', 'persistence', 'trojan', 'implant'],
-    'shell': ['webshell', 'reverse shell', 'bind shell', 'terminal'],
-    'rce': ['remote code execution', 'command injection', 'webshell'],
-
-    // Credentials
-    'credential': ['password', 'username', 'login', 'auth', 'creds'],
-    'password': ['credential', 'pass', 'pwd', 'secret'],
-    'username': ['user', 'login', 'credential'],
-
-    // Vulnerabilities
-    'sqli': ['sql injection', 'database', 'injection'],
-    'xss': ['cross site scripting', 'script injection'],
-    'lfi': ['local file inclusion', 'file read', 'path traversal'],
-    'ssrf': ['server side request forgery', 'internal', 'fetch'],
-
-    // Recon
-    'recon': ['reconnaissance', 'scan', 'enumeration', 'discovery'],
-    'scan': ['nmap', 'port', 'recon', 'enumeration'],
-
-    // General
-    'exploit': ['vulnerability', 'payload', 'attack', 'hack'],
-    'vuln': ['vulnerability', 'exploit', 'weakness', 'flaw']
-};
-
-/**
- * Expand query with synonyms
- * @param {string} query - Original search query
- * @returns {string} Expanded query
- */
-function expandQuery(query) {
-    if (!query) return query;
-
-    const queryLower = query.toLowerCase();
-    const originalTerms = queryLower.split(/\s+/);
-    const expandedTerms = new Set(originalTerms);
-
-    let expansionsAdded = 0;
-    const MAX_EXPANSIONS = 5; // Cap total expanded terms to prevent over-broadening
-
-    // Check each synonym group
-    for (const [key, synonyms] of Object.entries(QUERY_SYNONYMS)) {
-        if (expansionsAdded >= MAX_EXPANSIONS) break;
-        if (queryLower.includes(key)) {
-            // Add up to 2 most relevant synonyms (reduced from 3)
-            synonyms.slice(0, 2).forEach(syn => {
-                if (expansionsAdded >= MAX_EXPANSIONS) return;
-                // Only add single-word synonyms to avoid phrase explosion
-                if (!syn.includes(' ')) {
-                    expandedTerms.add(syn);
-                    expansionsAdded++;
-                }
-            });
-        }
-    }
-
-    // Return expanded query (original + synonyms)
-    return Array.from(expandedTerms).join(' ');
-}
-
-/**
- * Execute memory search
- * @param {object} params
- * @returns {Promise<object>}
- */
 export async function execute(params) {
     const traceId = uuidv4();
-    const startTime = Date.now();
-
     const {
         query: searchQuery,
-        project_id: projectId,
-        tenant_id: tenantId = 'local-user',
-        types = [],
         tags = [],
         required_tags: requiredTags = [],
-        limit = 50,
+        limit = 20,
         offset = 0,
         full_content: fullContent = false,
-        override_quarantine: overrideQuarantine = false,
-        allow_relations: allowRelations = false
+        scope_id: scopeId = ''
     } = params;
 
-    // QUERY EXPANSION: Expand query with synonyms for better recall
-    const expandedQuery = expandQuery(searchQuery);
-    const queryWasExpanded = expandedQuery !== searchQuery.toLowerCase();
-
     try {
-        // PERFORMA FILTERING (NORMAL SEARCH) - Using expanded query for better recall
-        const { results: rawResults, meta: searchMeta } = await hybridSearch({
-            query: expandedQuery,
-            projectId,
-            tenantId,
-            types,
-            tags: normalizeTags(tags),
-            overrideQuarantine,
-            limit: limit * 2 // Get more for reranking
+        // v7.0: Get more results for reranking, then apply post-processing
+        const fetchLimit = Math.min(limit * 2, 50);
+        const { results: rawResults, pagination: rawPagination } = searchRunbooks(searchQuery, {
+            tags,
+            requiredTags,
+            limit: fetchLimit,
+            offset: 0,  // Always fetch from 0 for reranking
+            fullContent,
+            scopeId
         });
 
-        // Rerank results
-        let reranked = rerank(rawResults, searchQuery, { maxResults: limit * 2 });
+        // v7.0: Apply reranking with target-tag boost
+        const reranked = rerankResults(rawResults, searchQuery);
 
-        // REQUIRED_TAGS FILTER: Post-filter to ensure ALL required tags are present
-        if (requiredTags.length > 0) {
-            reranked = reranked.filter(item => {
-                let itemTags = [];
-                try { itemTags = typeof item.tags === 'string' ? JSON.parse(item.tags || '[]') : (item.tags || []); } catch { itemTags = []; }
-                const lowerTags = itemTags.map(t => t.toLowerCase());
-                return requiredTags.every(rt => lowerTags.includes(rt.toLowerCase()));
-            });
-        }
+        // Apply pagination AFTER reranking
+        const paginated = reranked.slice(offset, offset + limit);
+        const total = reranked.length;
 
-        // Apply offset + limit for pagination
-        const paginatedResults = reranked.slice(offset, offset + limit);
-
-        // Format results - WITH SNIPPET + TAGS for immediate understanding
-        const results = paginatedResults.map(item => ({
-            id: item.id,
-            type: item.type,
-            title: item.title,
-            snippet: fullContent ? (item.content || '') : generateSnippet(item.content || '', 150),
-            tags: (() => { try { return typeof item.tags === 'string' ? JSON.parse(item.tags || '[]') : (item.tags || []); } catch { return []; } })(),
-            score: Math.round((item.final_score || item.score) * 1000) / 1000
-        }));
-
-        // Update last_used_at ONLY (score increment moved to memory_get for true interest signal)
-        if (results.length > 0) {
-            const ids = results.map(r => r.id);
-            const placeholders = ids.map(() => '?').join(',');
-            await query(
-                `UPDATE memory_items SET last_used_at = ? WHERE id IN (${placeholders})`,
-                [now(), ...ids]
-            );
-        }
-
-        // GUARDRAIL WARNING CHECK: Surface relevant warnings from guardrails table
-        let warnings = [];
-        try {
-            // Extract CVE patterns and key terms from the original query
-            const cveInQuery = (searchQuery || '').match(/CVE-\d{4}-\d{4,}/gi) || [];
-            const queryTerms = (searchQuery || '').toLowerCase().split(/\s+/).filter(t => t.length > 3);
-
-            // Check guardrails table for matching patterns
-            const activeGuardrails = await query(
-                `SELECT description, pattern_signature, rule_type FROM guardrails 
-                 WHERE tenant_id = ? AND project_id = ? AND active = 1
-                 AND (expires_at IS NULL OR expires_at > ?)`,
-                [tenantId, projectId, now()]
-            );
-
-            for (const g of activeGuardrails) {
-                const descLower = (g.description || '').toLowerCase();
-                // Match if: CVE in query matches guardrail, or query keyword appears in description
-                const cveMatch = cveInQuery.some(cve => descLower.includes(cve.toLowerCase()));
-                const keywordMatch = queryTerms.some(term =>
-                    descLower.includes(term) &&
-                    !['dari', 'yang', 'untuk', 'pada', 'dengan', 'running', 'caused'].includes(term)
-                );
-
-                if (cveMatch || keywordMatch) {
-                    warnings.push({
-                        rule_type: g.rule_type,
-                        message: g.description
-                    });
-                }
-            }
-        } catch (err) {
-            logger.warn('Guardrail warning check failed', { error: err.message });
-        }
-
-        // Build Compact Forensic Metadata (no UUID bloat)
-        const forensicMeta = await getForensicMeta(tenantId, projectId);
-
-        // Write audit log
-        await writeAuditLog(traceId, 'memory_search', params, {
-            result_count: results.length,
-            top_ids: results.slice(0, 3).map(r => r.id),
-            search_mode: searchMeta.mode
-        }, projectId, tenantId);
-
-        // MULTI-HOP REASONING (v3.0)
-        let relationsUsed = [];
-        let relatedResults = [];
-
-        if (allowRelations && results.length > 0) {
-            try {
-                // Traverse from top results to find related items
-                for (const item of results.slice(0, 3)) {
-                    const related = await traverseGraph(item.id, 2, ['causes', 'depends_on', 'related_to']);
-
-                    for (const rel of related) {
-                        // Get item details
-                        const rows = await query(
-                            'SELECT id, title, type, content, status FROM memory_items WHERE id = ? AND status = ?',
-                            [rel.id, 'active']
-                        );
-
-                        if (rows.length > 0) {
-                            const relItem = rows[0];
-                            relatedResults.push({
-                                id: relItem.id,
-                                title: relItem.title,
-                                type: relItem.type,
-                                snippet: generateSnippet(relItem.content, 100),
-                                hop: rel.hop,
-                                relation: rel.relation,
-                                path: rel.path,
-                                source_id: item.id,
-                                source_title: item.title
-                            });
-
-                            relationsUsed.push({
-                                from: item.id,
-                                to: rel.id,
-                                type: rel.relation,
-                                hop: rel.hop
-                            });
-                        }
-                    }
-                }
-            } catch (err) {
-                logger.warn('Multi-hop traversal failed', { error: err.message });
-            }
-        }
-
-        const totalBeforePagination = reranked.length;
-        const response = {
-            results,
+        return {
+            results: paginated,
             pagination: {
-                total: totalBeforePagination,
+                total: rawPagination.total,
                 offset,
                 limit,
-                returned: results.length,
-                has_more: offset + limit < totalBeforePagination
+                returned: paginated.length,
+                has_more: offset + limit < rawPagination.total
             },
             meta: {
                 trace_id: traceId,
-                count: results.length
+                count: paginated.length,
+                storage: 'filesystem',
+                reranked: true,
+                query_expanded: true
             }
         };
-
-        // Inject warnings ONLY if found — does not pollute clean results
-        if (warnings.length > 0) {
-            response.warnings = warnings;
-        }
-
-        return response;
 
     } catch (err) {
         logger.error('memory_search error', { error: err.message, trace_id: traceId });
         throw err;
-    }
-}
-
-/**
- * Summarize provenance JSON
- * @param {string|object} provenance 
- * @returns {string}
- */
-function summarizeProvenance(provenance) {
-    if (!provenance) return '';
-
-    try {
-        const p = typeof provenance === 'string' ? JSON.parse(provenance) : provenance;
-        if (p.source) return `Source: ${p.source}`;
-        if (p.created_by) return `By: ${p.created_by}`;
-        return '';
-    } catch {
-        return '';
-    }
-}
-
-/**
- * Write to audit log
- */
-async function writeAuditLog(traceId, toolName, request, response, projectId, tenantId) {
-    try {
-        await query(
-            `INSERT INTO audit_log (id, trace_id, ts, tool_name, request_json, response_json, project_id, tenant_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-            [
-                uuidv4(),
-                traceId,
-                now(),
-                toolName,
-                JSON.stringify(request),
-                JSON.stringify(response),
-                projectId,
-                tenantId
-            ]
-        );
-    } catch (err) {
-        logger.warn('Audit log write failed', { error: err.message });
     }
 }
 

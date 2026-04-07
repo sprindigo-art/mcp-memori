@@ -1,199 +1,65 @@
 /**
- * memory.feedback - Feedback pada memori
- * v4.0 - Cache invalidation on feedback
+ * memory.feedback v6.0 — File-based Runbook Feedback
+ * Updates frontmatter metadata in .md file
  * @module mcp/tools/memory.feedback
  */
-import { query, queryOne } from '../../db/index.js';
-import { now } from '../../utils/time.js';
+import { readRunbook, RUNBOOKS_DIR, parseFrontmatter, buildFrontmatter } from '../../storage/files.js';
+import { readFileSync, writeFileSync } from 'fs';
+import { join } from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import logger from '../../utils/logger.js';
-import { getMinimalForensicMeta } from '../../utils/forensic.js';
-import { recordMistake } from '../../governance/loopbreaker.js';
-import { invalidateCache } from '../../utils/cache.js';
-import { DEFAULT_POLICY } from '../../governance/policyEngine.js';
-import { withLock } from '../../concurrency/lock.js';
 
-/**
- * Tool definition for MCP
- */
 export const definition = {
     name: 'memory_feedback',
-    description: 'Beri feedback pada memori (useful/not_relevant/wrong)',
+    description: 'Beri feedback pada runbook (useful/not_relevant/wrong)',
     inputSchema: {
         type: 'object',
         properties: {
-            id: { type: 'string', description: 'Memory item ID' },
-            label: {
-                type: 'string',
-                enum: ['useful', 'not_relevant', 'wrong'],
-                description: 'Feedback label'
-            },
-            notes: { type: 'string', description: 'Additional notes' },
-            trace_id: { type: 'string', description: 'Related trace ID' }
+            id: { type: 'string', description: 'Runbook filename' },
+            label: { type: 'string', enum: ['useful', 'not_relevant', 'wrong'], description: 'Feedback label' },
+            notes: { type: 'string', description: 'Additional notes' }
         },
         required: ['id', 'label']
     }
 };
 
-/**
- * Execute memory feedback
- * @param {object} params
- * @returns {Promise<object>}
- */
 export async function execute(params) {
-    const traceId = params.trace_id || uuidv4();
-    const { id, label, notes = '', tenant_id: tenantId = 'local-user' } = params;
+    const traceId = uuidv4();
+    const { id, label, notes = '' } = params;
 
     try {
-        // Lock entire read-modify-write cycle to prevent lost updates
-        return await withLock(`feedback:${id}`, async () => {
-            // Get current item
-            const item = await queryOne(
-                `SELECT id, project_id, title, usefulness_score, error_count, status, verified
-       FROM memory_items WHERE id = ?`,
-                [id]
-            );
+        const filepath = join(RUNBOOKS_DIR, id);
+        let raw;
+        try { raw = readFileSync(filepath, 'utf8'); } catch {
+            return { ok: false, meta: { trace_id: traceId, error: 'Runbook not found' } };
+        }
 
-            if (!item) {
-                return {
-                    ok: false,
-                    updated: null,
-                    meta: { trace_id: traceId, error: 'Item not found' }
-                };
-            }
+        const { meta, body } = parseFrontmatter(raw);
+        const now = new Date().toISOString();
 
-            let newUsefulnessScore = item.usefulness_score;
-            let newErrorCount = item.error_count;
-            let newStatus = item.status;
-            let newVerified = item.verified;
+        // Update metadata based on feedback
+        if (label === 'useful') {
+            meta.verified = true;
+            meta.confidence = Math.min(1.0, (meta.confidence || 0.5) + 0.1);
+        } else if (label === 'wrong') {
+            meta.verified = false;
+            meta.confidence = Math.max(0.1, (meta.confidence || 0.5) - 0.2);
+        }
 
-            switch (label) {
-                case 'useful':
-                    // Boost usefulness score
-                    newUsefulnessScore += 1;
-                    break;
+        meta.updated = now;
+        meta.last_feedback = `${label}: ${notes} (${now})`;
 
-                case 'not_relevant':
-                    // Decrease usefulness score
-                    newUsefulnessScore -= 0.5;
-                    break;
+        const newFile = buildFrontmatter(meta) + body;
+        writeFileSync(filepath, newFile, 'utf8');
 
-                case 'wrong':
-                    // Increment error count, unverify, potentially quarantine
-                    newErrorCount += 1;
-                    newVerified = 0;
-
-                    // Quarantine if error count reaches policy threshold (NOT on first wrong!)
-                    if (newErrorCount >= DEFAULT_POLICY.quarantine_on_wrong_threshold) {
-                        newStatus = 'quarantined';
-                    }
-
-                    // Record mistake for loop breaker
-                    await recordMistake({
-                        projectId: item.project_id,
-                        tenantId,
-                        signature: `wrong:${item.title}:${id}`,
-                        severity: newErrorCount >= 2 ? 'high' : 'medium',
-                        notes: notes || `Marked as wrong. Error count: ${newErrorCount}`
-                    });
-                    break;
-            }
-
-            // Update item
-            await query(
-                `UPDATE memory_items SET 
-       usefulness_score = ?,
-       error_count = ?,
-       status = ?,
-       verified = ?,
-       status_reason = CASE WHEN ? != status THEN ? ELSE status_reason END,
-       updated_at = ?
-       WHERE id = ?`,
-                [
-                    newUsefulnessScore,
-                    newErrorCount,
-                    newStatus,
-                    newVerified,
-                    newStatus,
-                    `Feedback: ${label}. ${notes}`,
-                    now(),
-                    id
-                ]
-            );
-
-            // Invalidate cache after feedback update
-            invalidateCache(id);
-
-            // Write audit log
-            await writeAuditLog(traceId, 'memory_feedback',
-                { id, label, notes },
-                {
-                    previous: {
-                        usefulness_score: item.usefulness_score,
-                        error_count: item.error_count,
-                        status: item.status
-                    },
-                    updated: {
-                        usefulness_score: newUsefulnessScore,
-                        error_count: newErrorCount,
-                        status: newStatus
-                    }
-                },
-                item.project_id,
-                tenantId
-            );
-
-            // Build Minimal Forensic Metadata
-            const forensicMeta = getMinimalForensicMeta(tenantId, item.project_id);
-
-            return {
-                ok: true,
-                previous: {
-                    status: item.status,
-                    error_count: item.error_count,
-                    usefulness: item.usefulness_score
-                },
-                updated: {
-                    id,
-                    usefulness_score: newUsefulnessScore,
-                    error_count: newErrorCount,
-                    status: newStatus
-                },
-                meta: {
-                    trace_id: traceId,
-                    forensic: forensicMeta
-                }
-            };
-
-        }); // end withLock
-
+        return {
+            ok: true,
+            updated: { id, label, confidence: meta.confidence, verified: meta.verified },
+            meta: { trace_id: traceId, storage: 'filesystem' }
+        };
     } catch (err) {
-        logger.error('memory.feedback error', { error: err.message, trace_id: traceId });
+        logger.error('memory_feedback error', { error: err.message, trace_id: traceId });
         throw err;
-    }
-}
-
-/**
- * Write to audit log
- */
-async function writeAuditLog(traceId, toolName, request, response, projectId, tenantId) {
-    try {
-        await query(
-            `INSERT INTO audit_log (id, trace_id, ts, tool_name, request_json, response_json, project_id, tenant_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-            [
-                uuidv4(),
-                traceId,
-                now(),
-                toolName,
-                JSON.stringify(request),
-                JSON.stringify(response),
-                projectId,
-                tenantId
-            ]
-        );
-    } catch (err) {
-        logger.warn('Audit log write failed', { error: err.message });
     }
 }
 

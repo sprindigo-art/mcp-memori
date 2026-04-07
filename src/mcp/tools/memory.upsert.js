@@ -1,28 +1,54 @@
 /**
- * memory.upsert - Insert or update memory items (idempotent)
- * v4.0 - Front-Loading Embedding + Maintenance Counter + Cache Invalidation
+ * memory.upsert v7.0 — File-based Runbook Storage with Intelligence Layer
+ * ALL saves go to .md files. APPEND-ONLY: never delete valid content.
+ * v7.0: Universal error tracking, technique auto-save, auto-invalidation
+ * WAJIB memory_get dulu jika runbook SUDAH ADA — agar tahu isinya sebelum append
  * @module mcp/tools/memory.upsert
  */
-import { query, queryOne, transaction } from '../../db/index.js';
-import { withLock } from '../../concurrency/lock.js';
-import { retry, isRetryableError } from '../../concurrency/retry.js';
-import { checkIdempotency } from '../../concurrency/idempotency.js';
-import { contentHash, idempotencyHash } from '../../utils/hash.js';
-import { generateEmbedding, isEmbeddingAvailable } from '../../utils/embedding.js';
-import { normalizeTags, extractKeywords } from '../../utils/normalize.js';
-import { now } from '../../utils/time.js';
+import { saveRunbook, titleToFilename, findByTitle, RUNBOOKS_DIR, parseFrontmatter, buildFrontmatter, filterNoiseTags } from '../../storage/files.js';
+import { existsSync, readFileSync, writeFileSync } from 'fs';
+import { join, basename } from 'path';
 import { v4 as uuidv4 } from 'uuid';
+import { hasBeenRead, getReadStatus } from './memory.forget.js';
+import { invalidateGetCache } from './memory.get.js';
+import { updateIndexEntry } from '../../storage/searchIndex.js';
 import logger from '../../utils/logger.js';
-import { getMinimalForensicMeta } from '../../utils/forensic.js';
-import { suggestRelations, addRelation } from '../../retrieval/graph.js';
-import { invalidateCache } from '../../utils/cache.js';
+
+const AUTO_MEMORY_PATH = '/home/kali/.claude/projects/-home-kali-Desktop/memory/MEMORY.md';
 
 /**
- * Tool definition for MCP
+ * Auto-update MEMORY.md "TARGET AKTIF TERAKHIR" saat upsert ke RUNBOOK target
  */
+function updateActiveTarget(title, filename) {
+    if (!title.toLowerCase().startsWith('[runbook]')) return;
+    if (!existsSync(AUTO_MEMORY_PATH)) return;
+
+    try {
+        const targetName = title.replace(/^\[RUNBOOK\]\s*/i, '').trim();
+        const now = new Date().toISOString().split('T')[0];
+        let content = readFileSync(AUTO_MEMORY_PATH, 'utf8');
+
+        // Replace target line
+        content = content.replace(
+            /- Target:.*$/m,
+            `- Target: ${targetName} (updated ${now})`
+        );
+        // Replace checkpoint line
+        content = content.replace(
+            /- Checkpoint:.*$/m,
+            `- Checkpoint: Last upsert ${now} → ${filename}`
+        );
+
+        writeFileSync(AUTO_MEMORY_PATH, content, 'utf8');
+        logger.info('AUTO-MEMORY updated active target', { target: targetName, filename });
+    } catch (err) {
+        logger.warn('AUTO-MEMORY update failed (non-fatal)', { error: err.message });
+    }
+}
+
 export const definition = {
     name: 'memory_upsert',
-    description: 'Simpan atau update memori (idempotent, concurrency-safe)',
+    description: 'Simpan atau update runbook (.md file). Append-only: content lama TIDAK dihapus. WAJIB memory_get dulu jika runbook sudah ada — agar tidak kehilangan context.',
     inputSchema: {
         type: 'object',
         properties: {
@@ -31,27 +57,20 @@ export const definition = {
                 items: {
                     type: 'object',
                     properties: {
-                        type: {
-                            type: 'string',
-                            enum: ['fact', 'state', 'decision', 'runbook', 'episode'],
-                            description: 'Memory type'
-                        },
+                        type: { type: 'string', description: 'Auto-converted to runbook' },
                         project_id: { type: 'string', description: 'Project ID' },
-                        title: { type: 'string', description: 'Title' },
-                        content: { type: 'string', description: 'Content' },
-                        tags: {
-                            type: 'array',
-                            items: { type: 'string' },
-                            description: 'Tags'
-                        },
-                        verified: { type: 'boolean', description: 'Is verified' },
-                        confidence: { type: 'number', description: 'Confidence 0-1' },
-                        provenance_json: { type: 'object', description: 'Provenance info' },
-                        success: { type: 'boolean', description: 'Whether the action succeeded (boosts usefulness_score)' }
+                        title: { type: 'string', description: 'Runbook title, e.g. [RUNBOOK] target.com or [TEKNIK] GeoServer RCE' },
+                        content: { type: 'string', description: 'Content to append to runbook' },
+                        tags: { type: 'array', items: { type: 'string' }, description: 'Tags for search' },
+                        verified: { type: 'boolean' },
+                        confidence: { type: 'number' },
+                        success: { type: 'boolean', description: 'Whether the action succeeded' },
+                        replace_section: { type: 'string', description: 'Replace existing ## section with new content instead of append. Section name without ## prefix (e.g. "CREDENTIAL", "RE-ENTRY CHECKLIST"). If section not found, appends instead.' },
+                        replace_text: { type: 'string', description: 'Find this exact text in the runbook and replace it with content. Like Edit tool — surgical edit without replacing entire section. Text must be unique in the file.' }
                     },
-                    required: ['type', 'project_id', 'title', 'content']
+                    required: ['title', 'content']
                 },
-                description: 'Memory items to upsert'
+                description: 'Runbook items to save'
             }
         },
         required: ['items']
@@ -59,158 +78,453 @@ export const definition = {
 };
 
 /**
- * Execute memory upsert
- * @param {object} params
- * @returns {Promise<object>}
+ * v7.2: Auto-save errors to [TEKNIK] Kesalahan Universal Anti-Repeat Registry
+ * Uses the EXISTING file that already has 332+ compiled errors
+ * Every REAL failure across ANY target gets collected here for cross-target learning
+ *
+ * STRICT FILTER: Only save lines that describe an actual FAILED action/technique
+ * NOT status descriptions like "vpxd DEAD" or "credential DEAD" (those are states, not errors)
  */
+function autoSaveUniversalError(item, result) {
+    const title = (item.title || '').toLowerCase();
+
+    // Only for target runbooks and technique runbooks
+    if (!title.startsWith('[runbook]') && !title.startsWith('[teknik]')) return;
+
+    const rawContent = item.content || '';
+
+    // STRICT: Must contain explicit failure action words (not just status words)
+    // "GAGAL upload webshell" = YES (action failed)
+    // "vpxd DEAD since 2023" = NO (status description)
+    // "credential DEAD" = NO (status update)
+    const failureActionPattern = /(?:GAGAL|FAILED|BLOCKED|DITOLAK|REJECTED|NOT WORKING|TIDAK BERHASIL|EXPLOIT FAILED|TIMEOUT saat|ERROR saat|sudah dipatch|already patched|error:.+(?:connection|permission|denied|refused|500|403|404))/i;
+    if (!failureActionPattern.test(rawContent)) return;
+
+    // Extract ONLY lines that describe actual failed actions
+    const failLines = rawContent.split('\n')
+        .filter(l => {
+            // Must match failure action, not just contain "dead" or "error" as status
+            if (failureActionPattern.test(l)) return true;
+            // Also include lines right after failure that explain why
+            if (/(?:alasan|reason|cause|karena|because|→.*(?:gagal|fail))/i.test(l)) return true;
+            return false;
+        })
+        .slice(0, 8)
+        .join('\n');
+
+    if (!failLines.trim()) return;
+
+    const targetName = title.startsWith('[runbook]')
+        ? (item.title || '').replace(/^\[RUNBOOK\]\s*/i, '').trim()
+        : (item.title || '').replace(/^\[TEKNIK\]\s*/i, '').trim();
+    const now = new Date().toISOString().split('T')[0];
+
+    try {
+        // Save to EXISTING file: [TEKNIK] Kesalahan Universal Anti-Repeat Registry
+        const errorEntry = `\n### ${now} — ${targetName}\n${failLines}\n- Source: auto-saved from ${item.title}\n`;
+        saveRunbook(
+            '[TEKNIK] Kesalahan Universal Anti-Repeat Registry',
+            errorEntry,
+            ['universal', 'kesalahan', 'anti-repeat', targetName.toLowerCase().split('.')[0]],
+            { success: false }
+        );
+        logger.info('AUTO-SAVE universal error to Anti-Repeat Registry', { target: targetName });
+
+        // Also update FTS5 index
+        try { updateIndexEntry('TEKNIK_Kesalahan_Universal_Anti_Repeat.md'); } catch {}
+    } catch (err) {
+        logger.warn('Universal error auto-save failed (non-fatal)', { error: err.message });
+    }
+}
+
 /**
- * ANTI-LUPA FORMAT VALIDATION v3.0 — STRICT MODE
- * Episode WAJIB punya Command: DAN ## OUTCOME
- * Arrow Result / COMMANDS EXECUTED TIDAK LAGI diterima
- * @param {object} item - Memory item
- * @returns {object} { valid: boolean, warnings: string[] }
+ * v7.1: Auto dual-save technique to [TEKNIK] runbook
+ * When a successful technique is saved to [RUNBOOK] target, AUTO-SAVE to [TEKNIK] too
+ * Returns reminder string for what was auto-saved
  */
-function validateMemoryFormat(item) {
-    const warnings = [];
-    const content = item.content || '';
-    const type = item.type;
+function autoSaveTechnique(item) {
+    const title = (item.title || '').toLowerCase();
+    const content = (item.content || '');
 
-    // RUNBOOK: MUST have exact commands + steps
-    if (type === 'runbook') {
-        if (!content.includes('Command:') && !content.includes('command:')) {
-            warnings.push('RUNBOOK harus berisi "Command:" dengan exact command. Format: "Command: [EXACT COMMAND]"');
-        }
-        if (!content.includes('Step') && !content.includes('STEP')) {
-            warnings.push('RUNBOOK harus berisi step-by-step. Format: "## STEP 1:", "## STEP 2:"');
-        }
-    }
+    // Only for target runbooks
+    if (!title.startsWith('[runbook]')) return null;
 
-    // EPISODE: MUST have Command: AND ## OUTCOME (STRICT v3.0)
-    if (type === 'episode') {
-        // WAJIB: Command: atau command: (case-insensitive check)
-        const hasCommand = content.includes('Command:') || content.includes('command:');
-        if (!hasCommand) {
-            warnings.push('EPISODE WAJIB berisi "Command:" dengan exact command yang dieksekusi. Format: "Command: [EXACT COMMAND]"');
-        }
+    // v7.3 FIX: Detect REAL success, NOT content that mentions technique in failure context
+    // CRITICAL: "TIDAK BERHASIL" / "NOT WORKING" must NOT count as success
+    const hasTechniqueKeyword = /(?:cve-|exploit|rce|sqli|xss|ssrf|xxe|lfi|rfi|deserialization|bypass|injection|upload|webshell|reverse.shell)/i.test(content);
 
-        // WAJIB: ## OUTCOME section
-        const hasOutcome = /##\s*OUTCOME/i.test(content);
-        if (!hasOutcome) {
-            warnings.push('EPISODE WAJIB berisi "## OUTCOME" section. Format: "## OUTCOME: [RESULT]"');
-        }
+    // Strip negated success phrases BEFORE checking for success signals
+    const contentForSuccess = content
+        .replace(/TIDAK\s+BERHASIL/gi, '_NEG_')
+        .replace(/NOT\s+(?:WORKING|SUCCESS)/gi, '_NEG_')
+        .replace(/BELUM\s+BERHASIL/gi, '_NEG_');
+    const hasSuccessSignal = /(?:berhasil|success|achieved|working|shell obtained|root obtained|rce confirmed|access gained)/i.test(contentForSuccess);
+    const hasFailureSignal = /(?:GAGAL|FAILED|BLOCKED|DITOLAK|REJECTED|TIDAK BERHASIL|EXPLOIT FAILED|NOT WORKING|sudah dipatch|already patched)/i.test(content);
 
-        // Check for lazy status-only format (FORBIDDEN)
-        const lazyPatterns = [
-            /^(✅|❌|⚠️)\s*\w+\s+(AKTIF|aktif|BERHASIL|berhasil|GAGAL|gagal)/m,
-            /tunnel AKTIF/i,
-            /berhasil upload/i
-        ];
-        for (const pattern of lazyPatterns) {
-            if (pattern.test(content) && !hasCommand) {
-                warnings.push('DILARANG: Status-only tanpa exact command. Harus ada "Command:" di setiap step.');
-            }
-        }
-    }
+    // Count failure vs success lines to determine overall intent
+    const lines = content.split('\n');
+    const failLines = lines.filter(l => /(?:GAGAL|FAILED|BLOCKED|DITOLAK|TIDAK BERHASIL|EXPLOIT FAILED|NOT WORKING|dipatch|patched)/i.test(l)).length;
+    const successLines = lines.filter(l => {
+        const cleaned = l.replace(/TIDAK\s+BERHASIL/gi, '').replace(/NOT\s+(?:WORKING|SUCCESS)/gi, '').replace(/BELUM\s+BERHASIL/gi, '');
+        return /(?:berhasil|success|achieved|shell obtained|rce confirmed|access gained)/i.test(cleaned);
+    }).length;
 
-    // FACT (credentials): MUST have HOW TO USE
-    if (type === 'fact' && (
-        content.toLowerCase().includes('credential') ||
-        content.toLowerCase().includes('password') ||
-        content.toLowerCase().includes('username')
-    )) {
-        if (!content.includes('HOW TO USE') && !content.includes('Example:') && !content.includes('Command:')) {
-            warnings.push('FACT credentials harus berisi "HOW TO USE:" dengan contoh command penggunaan.');
+    // SKIP if: no technique keyword, no REAL success signal, OR more failure lines than success lines
+    if (!hasTechniqueKeyword || !hasSuccessSignal) return null;
+    if (hasFailureSignal && failLines >= successLines) return null;
+
+    // Extract technique name
+    const cveMatch = content.match(/CVE-\d{4}-\d{4,}/i);
+    const techniquePatterns = [
+        /teknik[:\s]+([^\n]+)/i,
+        /exploit[:\s]+([^\n]+)/i,
+        /method[:\s]+([^\n]+)/i,
+        /menggunakan\s+([^\n,]+)/i
+    ];
+
+    let techniqueName = cveMatch ? cveMatch[0] : null;
+    if (!techniqueName) {
+        for (const pattern of techniquePatterns) {
+            const match = content.match(pattern);
+            if (match) { techniqueName = match[1].trim().substring(0, 80); break; }
         }
     }
 
-    return {
-        valid: warnings.length === 0,
-        warnings: warnings
-    };
+    if (!techniqueName) return null;
+
+    // Extract target name from title
+    const targetName = (item.title || '').replace(/^\[RUNBOOK\]\s*/i, '').trim();
+    const now = new Date().toISOString().split('T')[0];
+
+    // Extract relevant lines (commands, outcomes)
+    const relevantLines = content.split('\n')
+        .filter(l => /(?:command|berhasil|success|exploit|shell|root|rce|bypass|http|curl|wget|python)/i.test(l))
+        .slice(0, 15)
+        .join('\n');
+
+    if (!relevantLines.trim()) return null;
+
+    // AUTO-SAVE to per-technique runbook: [TEKNIK] {nama}
+    try {
+        const teknikContent = `\n### ${now} — Tested on: ${targetName}\n${relevantLines}\n- Status: SUCCESS\n`;
+        const teknikTags = ['teknik', techniqueName.toLowerCase().replace(/[^a-z0-9]/g, '-'), targetName.toLowerCase().split('.')[0]];
+
+        saveRunbook(`[TEKNIK] ${techniqueName}`, teknikContent, teknikTags, { success: true });
+        logger.info('AUTO DUAL-SAVE technique (per-teknik)', { technique: techniqueName, target: targetName });
+
+        // Also update FTS5 index for per-technique file
+        try { updateIndexEntry(titleToFilename(`[TEKNIK] ${techniqueName}`)); } catch {}
+
+        // v7.2: ALSO save to consolidated registry: [TEKNIK] Teknik Berhasil Universal
+        // This is ONE file that collects ALL successful techniques for cross-target reuse
+        try {
+            const consolidatedEntry = `\n### ${now} — ${techniqueName} @ ${targetName}\n- Teknik: ${techniqueName}\n- Target: ${targetName}\n- Detail: ${relevantLines.split('\n').slice(0, 5).join(' | ')}\n- Status: SUCCESS\n`;
+            saveRunbook(
+                '[TEKNIK] Teknik Berhasil Universal',
+                consolidatedEntry,
+                ['universal', 'teknik-berhasil', 'registry', techniqueName.toLowerCase().replace(/[^a-z0-9]/g, '-')],
+                { success: true }
+            );
+            logger.info('AUTO-SAVE to Teknik Berhasil Universal', { technique: techniqueName, target: targetName });
+            try { updateIndexEntry('TEKNIK_Teknik_Berhasil_Universal.md'); } catch {}
+        } catch (consolidateErr) {
+            logger.warn('Consolidated technique save failed (non-fatal)', { error: consolidateErr.message });
+        }
+
+        return `✅ AUTO DUAL-SAVE: Teknik "${techniqueName}" berhasil di ${targetName} → tersimpan ke [TEKNIK] ${techniqueName} + [TEKNIK] Teknik Berhasil Universal`;
+    } catch (err) {
+        logger.warn('Auto technique save failed', { error: err.message, technique: techniqueName });
+        return `⚠️ DUAL-SAVE GAGAL: Teknik "${techniqueName}" tidak bisa auto-save ke [TEKNIK]. Manual save diperlukan.`;
+    }
+}
+
+/**
+ * v7.0: Auto-detect and mark invalidated techniques/credentials
+ * Returns reminder if content indicates something was patched/dead
+ */
+function checkAutoInvalidation(item) {
+    const content = (item.content || '');
+    const title = (item.title || '').toLowerCase();
+    const reminders = [];
+
+    // Detect PATCHED signals
+    if (/(?:sudah di.?patch|already patched|patch applied|vulnerability fixed|not vulnerable|patched)/i.test(content)) {
+        if (title.startsWith('[teknik]')) {
+            reminders.push('⚠️ AUTO-INVALIDATION: Teknik ini terdeteksi sudah PATCHED di target. Update section ## PATCHED TARGETS di runbook teknik ini.');
+        } else if (title.startsWith('[runbook]')) {
+            reminders.push('⚠️ AUTO-INVALIDATION: Exploit/teknik terdeteksi sudah PATCHED. Update ## GAGAL section dengan alasan "PATCHED" + tanggal.');
+        }
+    }
+
+    // Detect DEAD credential signals
+    if (/(?:password changed|credential.*(dead|expired|invalid|revoked)|access denied|connection refused|authentication failed)/i.test(content)) {
+        if (title.startsWith('[runbook]')) {
+            reminders.push('⚠️ CREDENTIAL DEAD: Terdeteksi credential/akses yang sudah tidak valid. Update ## LIVE STATUS dengan replace_section untuk mark DEAD.');
+        }
+    }
+
+    // Detect version upgrade (target updated, techniques may not work)
+    if (/(?:upgraded to|updated to version|new version|version \d+\.\d+)/i.test(content)) {
+        reminders.push('⚠️ VERSION CHANGE: Terdeteksi perubahan versi di target. Validasi ulang semua teknik yang terdaftar di runbook ini.');
+    }
+
+    return reminders;
 }
 
 export async function execute(params) {
     const traceId = uuidv4();
-    const { items, tenant_id: tenantId = 'local-user' } = params;
+    let { items } = params;
 
-    if (!items || items.length === 0) {
-        return {
-            upserted: [],
-            meta: { trace_id: traceId, error: 'No items provided' }
-        };
-    }
-
-    // ANTI-LUPA: Validate all items format first
-    const formatWarnings = [];
-    // Collect validation results
-    const criticalErrors = [];
-
-    for (const item of items) {
-        const validation = validateMemoryFormat(item);
-        if (!validation.valid) {
-            // Check if this is a CRITICAL format error (runbook/episode without commands)
-            const isCritical = (item.type === 'runbook' || item.type === 'episode') &&
-                validation.warnings.some(w =>
-                    w.includes('Command:') ||
-                    w.includes('exact command') ||
-                    w.includes('step-by-step')
-                );
-
-            if (isCritical) {
-                criticalErrors.push({
-                    title: item.title,
-                    type: item.type,
-                    errors: validation.warnings,
-                    resolution: 'Tambahkan "Command: [EXACT COMMAND]" dan step-by-step untuk setiap action'
-                });
-            } else {
-                // Non-critical: just warning
-                formatWarnings.push({
-                    title: item.title,
-                    type: item.type,
-                    warnings: validation.warnings
-                });
-            }
+    // v7.1 FIX: Defensive parsing — Claude Code sometimes sends items as JSON string instead of array
+    if (typeof items === 'string') {
+        try {
+            items = JSON.parse(items);
+            logger.info('UPSERT: items was string, parsed to array', { count: items.length });
+        } catch (parseErr) {
+            logger.error('UPSERT: items string is not valid JSON', { error: parseErr.message, preview: items.substring(0, 200) });
+            return { upserted: [], meta: { trace_id: traceId, error: 'items is not valid JSON array: ' + parseErr.message } };
         }
     }
 
-    // HARD BLOCK: Reject if critical format errors found
-    if (criticalErrors.length > 0) {
-        logger.error('ANTI-LUPA HARD BLOCK - Format tidak lengkap', {
-            trace_id: traceId,
-            blocked_items: criticalErrors.length,
-            details: criticalErrors
-        });
-
-        throw new Error(
-            `ANTI-LUPA HARD BLOCK: ${criticalErrors.length} item(s) DITOLAK karena format tidak lengkap!\n` +
-            `Items: ${criticalErrors.map(e => `"${e.title}" (${e.type})`).join(', ')}\n` +
-            `Errors: ${criticalErrors.flatMap(e => e.errors).join('; ')}\n` +
-            `SOLUSI: Pastikan setiap runbook/episode memiliki "Command:" dengan exact command yang dieksekusi!`
-        );
+    // Ensure items is actually an array of objects
+    if (!Array.isArray(items)) {
+        // Last resort: wrap single object in array
+        if (items && typeof items === 'object' && items.title) {
+            items = [items];
+        } else {
+            return { upserted: [], meta: { trace_id: traceId, error: 'items must be an array, got: ' + typeof items } };
+        }
     }
 
-    // Log warnings for non-critical issues (still allow save)
-    if (formatWarnings.length > 0) {
-        logger.warn('ANTI-LUPA FORMAT WARNING (non-blocking)', {
-            trace_id: traceId,
-            items_with_issues: formatWarnings.length,
-            details: formatWarnings
-        });
+    if (items.length === 0) {
+        return { upserted: [], meta: { trace_id: traceId, error: 'No items provided' } };
+    }
+
+    // Validate each item is an object (not a character from string iteration)
+    items = items.filter(item => {
+        if (!item || typeof item !== 'object') {
+            logger.warn('UPSERT: Skipping invalid item (not object)', { type: typeof item, value: String(item).substring(0, 50) });
+            return false;
+        }
+        return true;
+    });
+
+    if (items.length === 0) {
+        return { upserted: [], meta: { trace_id: traceId, error: 'No valid items after filtering (items may have been sent as string instead of array)' } };
     }
 
     const results = [];
 
     for (const item of items) {
         try {
-            const result = await upsertItem(item, tenantId, traceId);
-            results.push(result);
+            const title = item.title || 'Untitled Runbook';
+            const content = item.content || '';
+            const tags = item.tags || [];
+            const options = {
+                verified: item.verified,
+                confidence: item.confidence,
+                success: item.success
+            };
+
+            // Cek apakah runbook sudah ada (by filename atau by frontmatter title)
+            const filename = titleToFilename(title);
+            let filepath = join(RUNBOOKS_DIR, filename);
+            let actualFilename = filename;
+            let fileExists = existsSync(filepath);
+
+            // Fallback: cari by frontmatter title (title beda sanitization → filename beda)
+            if (!fileExists) {
+                const matchedPath = findByTitle(title);
+                if (matchedPath) {
+                    filepath = matchedPath;
+                    actualFilename = basename(matchedPath);
+                    fileExists = true;
+                }
+            }
+
+            // === HARD BLOCK: Runbook SUDAH ADA tapi BELUM dibaca → TOLAK ===
+            if (fileExists && !hasBeenRead(actualFilename)) {
+                const readStatus = getReadStatus(actualFilename);
+                logger.warn('UPSERT BLOCKED: runbook exists but not read first', { filename: actualFilename, title, readStatus });
+                results.push({
+                    id: actualFilename,
+                    version: 0,
+                    status: 'blocked',
+                    action: 'rejected',
+                    read_status: readStatus,
+                    error: `BLOCKED: Runbook "${actualFilename}" sudah ada tapi BELUM dibaca cukup. `
+                        + `Status: ${readStatus.reason}${readStatus.mode ? ` (mode=${readStatus.mode}, chars=${readStatus.charsRead || 0})` : ''}. `
+                        + `FIX: Jalankan memory_get({id:"${actualFilename}"}) tanpa section/sections_list untuk FULL read, `
+                        + `ATAU memory_get({id:"...", sections_list:true}) + memory_get({id:"...", section:"RELEVANT"}) untuk partial read. `
+                        + `Baru boleh upsert setelah benar-benar PAHAM isi runbook.`
+                });
+                continue;
+            }
+
+            // === REPLACE TEXT MODE: Edit spesifik — cari teks lama, ganti dengan teks baru ===
+            // Sama seperti Edit tool — surgical edit tanpa replace seluruh section
+            if (item.replace_text && fileExists) {
+                try {
+                    const raw = readFileSync(filepath, 'utf8');
+                    const { meta, body } = parseFrontmatter(raw);
+                    const oldText = item.replace_text;
+                    const newText = content;
+
+                    // Cek apakah old_text ada di body
+                    const occurrences = body.split(oldText).length - 1;
+                    if (occurrences === 0) {
+                        results.push({
+                            id: actualFilename,
+                            version: meta.version || 1,
+                            status: 'error',
+                            action: 'replace_text_not_found',
+                            error: `Text not found in runbook. Make sure replace_text matches exactly.`,
+                            preview: oldText.substring(0, 100)
+                        });
+                        continue;
+                    }
+                    if (occurrences > 1) {
+                        results.push({
+                            id: actualFilename,
+                            version: meta.version || 1,
+                            status: 'error',
+                            action: 'replace_text_ambiguous',
+                            error: `Text found ${occurrences} times — must be unique. Provide more context to make it unique.`,
+                            preview: oldText.substring(0, 100)
+                        });
+                        continue;
+                    }
+
+                    // Replace exactly once
+                    const newBody = body.replace(oldText, newText);
+
+                    // Auto-append changelog
+                    const now = new Date().toISOString().split('T')[0];
+                    const changelogEntry = `- ${now} v${(meta.version || 1) + 1}: replace_text (${oldText.length} → ${newText.length} chars)`;
+                    const changelogHeader = '## _CHANGELOG';
+                    let finalBody = newBody;
+                    if (finalBody.includes(changelogHeader)) {
+                        finalBody = finalBody.replace(changelogHeader, `${changelogHeader}\n${changelogEntry}`);
+                    } else {
+                        finalBody = finalBody.trim() + `\n\n${changelogHeader}\n${changelogEntry}\n`;
+                    }
+
+                    // Update metadata
+                    const oldTags = Array.isArray(meta.tags) ? meta.tags : [];
+                    meta.tags = filterNoiseTags([...new Set([...oldTags, ...tags.map(t => t.toLowerCase())])]);
+                    meta.updated = new Date().toISOString();
+                    meta.version = (meta.version || 1) + 1;
+
+                    writeFileSync(filepath, buildFrontmatter(meta) + finalBody.trim() + '\n', 'utf8');
+
+                    invalidateGetCache(actualFilename);
+                    try { updateIndexEntry(actualFilename); } catch {}
+                    updateActiveTarget(title, actualFilename);
+
+                    logger.info('TEXT REPLACED', { filename: actualFilename, old_len: oldText.length, new_len: newText.length });
+
+                    results.push({
+                        id: actualFilename,
+                        version: meta.version,
+                        status: 'active',
+                        action: 'text_replaced',
+                        old_length: oldText.length,
+                        new_length: newText.length,
+                        filepath
+                    });
+                    continue;
+                } catch (replaceErr) {
+                    logger.error('Replace text error', { error: replaceErr.message, filename: actualFilename });
+                }
+            }
+
+            // === REPLACE SECTION MODE: Ganti section yang sudah tidak valid ===
+            if (item.replace_section && fileExists) {
+                try {
+                    const raw = readFileSync(filepath, 'utf8');
+                    const { meta, body } = parseFrontmatter(raw);
+                    const sectionHeader = item.replace_section.startsWith('##') ? item.replace_section : `## ${item.replace_section}`;
+                    const sectionRegex = new RegExp(
+                        `${sectionHeader.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s\\S]*?(?=\\n## |$)`, 'i'
+                    );
+                    const match = body.match(sectionRegex);
+
+                    let newBody;
+                    if (match) {
+                        // Replace existing section
+                        newBody = body.replace(sectionRegex, `${sectionHeader}\n${content}\n\n`);
+                        logger.info('SECTION REPLACED', { filename: actualFilename, section: item.replace_section, old_size: match[0].length, new_size: content.length });
+
+                        // Auto-append changelog entry (APPEND-ONLY — never replaced)
+                        const now = new Date().toISOString().split('T')[0];
+                        const changelogEntry = `- ${now} v${(meta.version || 1) + 1}: replaced ## ${item.replace_section} (${match[0].length} → ${content.length} chars)`;
+                        const changelogHeader = '## _CHANGELOG';
+                        if (newBody.includes(changelogHeader)) {
+                            newBody = newBody.replace(changelogHeader, `${changelogHeader}\n${changelogEntry}`);
+                        } else {
+                            newBody = newBody.trim() + `\n\n${changelogHeader}\n${changelogEntry}\n`;
+                        }
+                    } else {
+                        // Section not found → append
+                        newBody = body.trim() + `\n\n${sectionHeader}\n${content}\n`;
+                        logger.info('SECTION NOT FOUND, APPENDED', { filename: actualFilename, section: item.replace_section });
+                    }
+
+                    // Merge tags (import filterNoiseTags from files.js)
+                    const oldTags = Array.isArray(meta.tags) ? meta.tags : [];
+                    meta.tags = filterNoiseTags([...new Set([...oldTags, ...tags.map(t => t.toLowerCase())])]);
+                    meta.updated = new Date().toISOString();
+                    meta.version = (meta.version || 1) + 1;
+
+                    writeFileSync(filepath, buildFrontmatter(meta) + newBody.trim() + '\n', 'utf8');
+
+                    // v7.0: Invalidate cache + update index after replace_section
+                    invalidateGetCache(actualFilename);
+                    try { updateIndexEntry(actualFilename); } catch {}
+
+                    // Auto-update MEMORY.md active target
+                    updateActiveTarget(title, actualFilename);
+
+                    results.push({
+                        id: actualFilename,
+                        version: meta.version,
+                        status: 'active',
+                        action: match ? 'section_replaced' : 'section_appended',
+                        section: item.replace_section,
+                        filepath
+                    });
+                    continue;
+                } catch (replaceErr) {
+                    logger.error('Replace section error', { error: replaceErr.message, filename: actualFilename });
+                    // Fall through to normal append
+                }
+            }
+
+            const result = saveRunbook(title, content, tags, options);
+
+            // v7.0: Invalidate LRU cache + update FTS5 index
+            if (result.action !== 'skipped_duplicate' && result.action !== 'skipped_empty') {
+                invalidateGetCache(result.id);
+                try { updateIndexEntry(result.id); } catch {}
+            }
+
+            // Auto-update MEMORY.md active target
+            if (result.action !== 'skipped_duplicate' && result.action !== 'skipped_empty') {
+                updateActiveTarget(title, result.id);
+            }
+
+            const upsertResult = {
+                id: result.id,
+                version: result.version,
+                status: 'active',
+                action: result.action,
+                filepath: result.filepath
+            };
+
+            results.push(upsertResult);
+
         } catch (err) {
-            logger.error('Upsert item error', {
-                error: err.message,
-                title: item.title,
-                trace_id: traceId
-            });
+            logger.error('Upsert runbook error', { error: err.message, title: item.title, trace_id: traceId });
             results.push({
                 id: null,
                 version: 0,
@@ -220,677 +534,50 @@ export async function execute(params) {
         }
     }
 
-    // Write audit log
-    const hasErrors = results.some(r => r.status === 'error');
-    await writeAuditLog(traceId, 'memory_upsert',
-        { item_count: items.length },
-        { upserted_count: results.filter(r => r.id).length },
-        items[0]?.project_id || 'unknown',
-        tenantId,
-        hasErrors
-    );
+    // === POST-UPSERT INTELLIGENCE (v7.0) ===
+    const reminders = [];
 
-    // MAINTENANCE COUNTER: Increment and check if maintenance needed
-    let maintenanceWarning = null;
-    try {
-        const successCount = results.filter(r => r.id).length;
-        if (successCount > 0) {
-            await query(
-                `UPDATE system_state SET value = CAST(value AS INTEGER) + ?, updated_at = datetime('now') WHERE key = 'upsert_count'`,
-                [successCount]
-            );
-            const counter = await queryOne(`SELECT value FROM system_state WHERE key = 'upsert_count'`);
-            const count = parseInt(counter?.value || '0', 10);
-            if (count > 0 && count % 50 === 0) {
-                maintenanceWarning = `[SYSTEM] Maintenance recommended (${count} upserts since last clean). Run memory_maintain with actions=["dedup","clean_links","auto_guardrails"] now.`;
-                logger.info('Maintenance counter triggered', { count });
+    for (const item of items) {
+        const title = (item.title || '').toLowerCase();
+
+        // v7.0: AUTO-SAVE universal errors (cross-target learning)
+        autoSaveUniversalError(item, results);
+
+        // v7.1: Auto dual-save technique to [TEKNIK] runbook (not just reminder)
+        const dualSaveResult = autoSaveTechnique(item);
+        if (dualSaveResult) reminders.push(dualSaveResult);
+
+        // v7.0: Check auto-invalidation (PATCHED/DEAD/VERSION detection)
+        const invalidationReminders = checkAutoInvalidation(item);
+        reminders.push(...invalidationReminders);
+
+        // REMINDER: Teknik gagal → harus simpan ke section GAGAL
+        if (/(?:gagal|failed|blocked|denied|patched|timeout|unreachable|dead|rejected)/i.test(item.content || '')) {
+            if (!/gagal/i.test((item.content || '').substring(0, 20))) {
+                reminders.push('⚠️ FAILURE DETECTED: Content mengandung indikasi kegagalan. Pastikan disimpan di section ## GAGAL agar tidak diulangi.');
             }
         }
-    } catch (counterErr) {
-        logger.debug('Maintenance counter update failed', { error: counterErr.message });
-    }
 
-    // Build Minimal Forensic Metadata (upsert is high-frequency, minimal bloat)
-    const forensicMeta = getMinimalForensicMeta(tenantId, items[0]?.project_id || 'unknown');
+        // REMINDER: Credential baru → harus update RE-ENTRY CHECKLIST
+        if (/(?:password|credential|ssh|webshell|tunnel|token|key|login)/i.test(item.content || '') && title.startsWith('[runbook]')) {
+            reminders.push('⚠️ CREDENTIAL: Pastikan update section ## RE-ENTRY CHECKLIST dan ## LIVE STATUS dengan status ALIVE/DEAD terkini.');
+        }
+    }
 
     const response = {
         upserted: results,
-        format_warnings: formatWarnings.length > 0 ? formatWarnings : undefined,
         meta: {
             trace_id: traceId,
-            forensic: forensicMeta,
-            anti_lupa_validation: formatWarnings.length === 0 ? 'PASSED' : 'WARNING - Format tidak sesuai template'
+            storage: 'filesystem',
+            format: '.md'
         }
     };
 
-    // Inject maintenance warning if triggered
-    if (maintenanceWarning) {
-        response.maintenance_warning = maintenanceWarning;
+    if (reminders.length > 0) {
+        response.reminders = [...new Set(reminders)];
     }
 
     return response;
-}
-
-/**
- * Upsert a single item with locking and retry
- * @param {object} item 
- * @param {string} tenantId 
- * @param {string} traceId 
- * @returns {Promise<object>}
- */
-async function upsertItem(item, tenantId, traceId) {
-    const projectId = item.project_id || 'default';
-
-    return withLock(`upsert:${projectId}`, async () => {
-        return retry(async () => {
-            // Calculate content hash
-            const hash = contentHash(item.content);
-
-            // Check idempotency
-            const { exists, existingId, existingVersion } = await checkIdempotency({
-                tenant_id: tenantId,
-                project_id: projectId,
-                type: item.type,
-                content: item.content,
-                content_hash: hash
-            });
-
-            if (exists) {
-                // Update existing item
-                await query(
-                    `UPDATE memory_items SET 
-           title = ?,
-           tags = ?,
-           verified = ?,
-           confidence = ?,
-           provenance_json = ?,
-           version = version + 1,
-           updated_at = ?
-           WHERE id = ?`,
-                    [
-                        item.title,
-                        JSON.stringify(normalizeTags(item.tags)),
-                        item.verified ? 1 : 0,
-                        item.confidence || 0.5,
-                        JSON.stringify(item.provenance_json || {}),
-                        now(),
-                        existingId
-                    ]
-                );
-
-                // Get updated version
-                const updated = await queryOne(
-                    `SELECT version, status FROM memory_items WHERE id = ?`,
-                    [existingId]
-                );
-
-                // Invalidate cache on update
-                invalidateCache(existingId);
-
-                return {
-                    id: existingId,
-                    version: updated.version,
-                    status: updated.status,
-                    action: 'updated'
-                };
-            }
-
-            // TITLE-BASED MATCHING: Update existing item when title+type+project matches
-            // This allows content updates for existing memory items (fixes version = 1 forever bug)
-            const titleMatch = await queryOne(
-                `SELECT id, version, content_hash, tags FROM memory_items 
-                 WHERE title = ? COLLATE NOCASE AND type = ? AND project_id = ? AND tenant_id = ?
-                 AND status = 'active'
-                 ORDER BY updated_at DESC LIMIT 1`,
-                [item.title, item.type, projectId, tenantId]
-            );
-
-            if (titleMatch) {
-                // HISTORY BACKUP: Save current version before overwrite (rollback protection)
-                try {
-                    await query(
-                        `INSERT INTO memory_items_history (history_id, item_id, version, title, content, tags, content_hash, usefulness_score, updated_at, reason)
-                         SELECT ?, id, version, title, content, tags, content_hash, usefulness_score, updated_at, 'title_match_update'
-                         FROM memory_items WHERE id = ?`,
-                        [uuidv4(), titleMatch.id]
-                    );
-                } catch (histErr) {
-                    logger.warn('History backup failed', { error: histErr.message, id: titleMatch.id });
-                }
-
-                // Regenerate embedding for new content
-                let newEmbedding = null;
-                try {
-                    if (await isEmbeddingAvailable()) {
-                        const textToEmbed = `${item.title} ${item.content}`;
-                        const embResult = await generateEmbedding(textToEmbed);
-                        if (embResult?.embedding) {
-                            newEmbedding = embResult.embedding;
-                        }
-                    }
-                } catch (err) {
-                    logger.warn('Embedding regeneration failed on content update', { error: err.message });
-                }
-
-                // MERGE TAGS: Preserve protected tags from old item
-                const oldTags = typeof titleMatch.tags === 'string'
-                    ? JSON.parse(titleMatch.tags || '[]')
-                    : (titleMatch.tags || []);
-                const newTags = normalizeTags(item.tags);
-                const PROTECTED_TAG_LIST = [
-                    'critical', 'operational', 'persistence', 'credential',
-                    'infrastructure', 'verified', 'access', 'exploit',
-                    'root', 'tunnel', 'ssh', 'webshell', 'technique', 'shell', 'backdoor'
-                ];
-                const protectedFromOld = oldTags.filter(t =>
-                    PROTECTED_TAG_LIST.includes(t.toLowerCase()) && !newTags.includes(t)
-                );
-                const mergedTags = [...newTags, ...protectedFromOld];
-
-                // Build dynamic update - only update embedding if we generated a new one
-                const updateFields = [
-                    'content = ?', 'content_hash = ?', 'tags = ?',
-                    'verified = ?', 'confidence = ?', 'provenance_json = ?',
-                    'version = version + 1', 'updated_at = ?'
-                ];
-                const updateValues = [
-                    item.content, hash,
-                    JSON.stringify(mergedTags),
-                    item.verified ? 1 : 0,
-                    item.confidence || 0.5,
-                    JSON.stringify(item.provenance_json || {}),
-                    now()
-                ];
-
-                if (newEmbedding) {
-                    updateFields.push('embedding = ?');
-                    updateValues.push(JSON.stringify(newEmbedding));
-                }
-
-                updateValues.push(titleMatch.id); // for WHERE clause
-
-                await query(
-                    `UPDATE memory_items SET ${updateFields.join(', ')} WHERE id = ?`,
-                    updateValues
-                );
-
-                // RE-RUN AUTO-LINKING: Refresh knowledge graph for updated content
-                try {
-                    const suggestions = await suggestRelations(titleMatch.id, projectId, tenantId);
-                    let linksRefreshed = 0;
-                    for (const suggestion of suggestions.slice(0, 3)) {
-                        if (suggestion.confidence >= 0.4) {
-                            try {
-                                await addRelation({
-                                    fromId: titleMatch.id,
-                                    toId: suggestion.toId,
-                                    relation: suggestion.suggestedRelation,
-                                    weight: suggestion.confidence,
-                                    metadata: { auto_created: true, source: 'content_update_relink' }
-                                });
-                                linksRefreshed++;
-                            } catch (linkErr) {
-                                logger.debug('Re-link failed', { error: linkErr.message });
-                            }
-                        }
-                    }
-                    if (linksRefreshed > 0) {
-                        logger.info('Knowledge graph refreshed after content update', {
-                            id: titleMatch.id, links_refreshed: linksRefreshed
-                        });
-                    }
-                } catch (autoLinkErr) {
-                    logger.debug('Auto-relinking skipped', { error: autoLinkErr.message });
-                }
-
-                const updated = await queryOne(
-                    `SELECT version, status FROM memory_items WHERE id = ?`,
-                    [titleMatch.id]
-                );
-
-                logger.info('Title-based content update', {
-                    id: titleMatch.id,
-                    title: item.title,
-                    old_version: titleMatch.version,
-                    new_version: updated.version,
-                    tags_merged: protectedFromOld.length > 0,
-                    trace_id: traceId
-                });
-
-                // Invalidate cache on content update
-                invalidateCache(titleMatch.id);
-
-                return {
-                    id: titleMatch.id,
-                    version: updated.version,
-                    status: updated.status,
-                    action: 'content_updated',
-                    previous_content_hash: titleMatch.content_hash
-                };
-            }
-
-            // FUZZY TITLE MATCHING v5.1: Fallback when exact title doesn't match
-            // Solves the "99.6% items v1" problem — AI rarely writes identical titles
-            // Uses keyword overlap (Jaccard >= 0.6) to find similar items
-            const fuzzyMatch = await findFuzzyTitleMatch(item, projectId, tenantId);
-            if (fuzzyMatch) {
-                // Regenerate embedding for new content
-                let newEmbedding = null;
-                try {
-                    if (await isEmbeddingAvailable()) {
-                        const textToEmbed = buildFrontLoadedEmbeddingInput(item);
-                        const embResult = await generateEmbedding(textToEmbed);
-                        if (embResult?.embedding) {
-                            newEmbedding = embResult.embedding;
-                        }
-                    }
-                } catch (err) {
-                    logger.warn('Embedding regen failed on fuzzy update', { error: err.message });
-                }
-
-                // MERGE TAGS: Preserve protected tags from old item
-                const oldTags = typeof fuzzyMatch.tags === 'string'
-                    ? JSON.parse(fuzzyMatch.tags || '[]')
-                    : (fuzzyMatch.tags || []);
-                const newTags = normalizeTags(item.tags);
-                const PROTECTED_TAG_LIST = [
-                    'critical', 'operational', 'persistence', 'credential',
-                    'infrastructure', 'verified', 'access', 'exploit',
-                    'root', 'tunnel', 'ssh', 'webshell', 'technique', 'shell', 'backdoor'
-                ];
-                const protectedFromOld = oldTags.filter(t =>
-                    PROTECTED_TAG_LIST.includes(t.toLowerCase()) && !newTags.includes(t)
-                );
-                const mergedTags = [...newTags, ...protectedFromOld];
-
-                // HISTORY BACKUP: Save current version before overwrite (rollback protection)
-                try {
-                    await query(
-                        `INSERT INTO memory_items_history (history_id, item_id, version, title, content, tags, content_hash, usefulness_score, updated_at, reason)
-                         SELECT ?, id, version, title, content, tags, content_hash, usefulness_score, updated_at, ?
-                         FROM memory_items WHERE id = ?`,
-                        [uuidv4(), `fuzzy_update:overlap=${fuzzyMatch._overlap?.toFixed(2)}`, fuzzyMatch.id]
-                    );
-                } catch (histErr) {
-                    logger.warn('History backup failed', { error: histErr.message, id: fuzzyMatch.id });
-                }
-
-                // Build update — update title too (since it's slightly different)
-                const updateFields = [
-                    'title = ?', 'content = ?', 'content_hash = ?', 'tags = ?',
-                    'verified = ?', 'confidence = ?', 'provenance_json = ?',
-                    'version = version + 1', 'updated_at = ?'
-                ];
-                const updateValues = [
-                    item.title, item.content, hash,
-                    JSON.stringify(mergedTags),
-                    item.verified ? 1 : 0,
-                    item.confidence || 0.5,
-                    JSON.stringify(item.provenance_json || {}),
-                    now()
-                ];
-
-                // Preserve usefulness_score: keep higher of old vs base score
-                if (item.success === true) {
-                    updateFields.push('usefulness_score = MAX(usefulness_score, usefulness_score + 0.5)');
-                } else if (item.success === false) {
-                    updateFields.push('usefulness_score = MAX(usefulness_score - 0.5, -5.0)');
-                }
-                // If success not specified, preserve existing score (no change)
-
-                if (newEmbedding) {
-                    updateFields.push('embedding = ?');
-                    updateValues.push(JSON.stringify(newEmbedding));
-                }
-
-                updateValues.push(fuzzyMatch.id);
-
-                await query(
-                    `UPDATE memory_items SET ${updateFields.join(', ')} WHERE id = ?`,
-                    updateValues
-                );
-
-                // Refresh knowledge graph links
-                try {
-                    const suggestions = await suggestRelations(fuzzyMatch.id, projectId, tenantId);
-                    for (const suggestion of suggestions.slice(0, 3)) {
-                        if (suggestion.confidence >= 0.4) {
-                            try {
-                                await addRelation({
-                                    fromId: fuzzyMatch.id,
-                                    toId: suggestion.toId,
-                                    relation: suggestion.suggestedRelation,
-                                    weight: suggestion.confidence,
-                                    metadata: { auto_created: true, source: 'fuzzy_title_relink' }
-                                });
-                            } catch (linkErr) {
-                                logger.debug('Fuzzy re-link failed', { error: linkErr.message });
-                            }
-                        }
-                    }
-                } catch (autoLinkErr) {
-                    logger.debug('Fuzzy auto-relinking skipped', { error: autoLinkErr.message });
-                }
-
-                const updated = await queryOne(
-                    `SELECT version, status FROM memory_items WHERE id = ?`,
-                    [fuzzyMatch.id]
-                );
-
-                logger.info('Fuzzy title match update', {
-                    id: fuzzyMatch.id,
-                    old_title: fuzzyMatch.title,
-                    new_title: item.title,
-                    overlap: fuzzyMatch._overlap,
-                    old_version: fuzzyMatch.version,
-                    new_version: updated.version,
-                    trace_id: traceId
-                });
-
-                invalidateCache(fuzzyMatch.id);
-
-                return {
-                    id: fuzzyMatch.id,
-                    version: updated.version,
-                    status: updated.status,
-                    action: 'fuzzy_updated',
-                    matched_title: fuzzyMatch.title,
-                    overlap_score: fuzzyMatch._overlap
-                };
-            }
-
-            // Insert new item
-            const id = uuidv4();
-
-            // Generate embedding with FRONT-LOADING strategy (v4.0)
-            // Puts Title + Tags + Outcome BEFORE content to solve 256-token truncation
-            let embedding = null;
-            if (await isEmbeddingAvailable()) {
-                try {
-                    const textToEmbed = buildFrontLoadedEmbeddingInput(item);
-                    const result = await generateEmbedding(textToEmbed);
-                    if (result && result.embedding) {
-                        embedding = result.embedding;
-                        logger.debug('Embedding generated (front-loaded)', {
-                            id,
-                            backend: result.backend,
-                            dim: embedding.length,
-                            input_length: textToEmbed.length
-                        });
-                    }
-                } catch (err) {
-                    logger.warn('Embedding generation failed', { error: err.message });
-                }
-            }
-
-            // Calculate initial usefulness_score from type + success flag
-            // Base scores ensure items start with meaningful ranking weight
-            const BASE_SCORES = { fact: 0.5, runbook: 0.5, decision: 0.2, state: 0.2, episode: 0.2 };
-            let initialScore = BASE_SCORES[item.type] || 0.2;
-            if (item.success === true) {
-                initialScore += 1.0;  // Success boost (fact success = 1.5, episode success = 1.2)
-            } else if (item.success === false) {
-                initialScore -= 0.5;  // Failure penalty (fact fail = 0.0, episode fail = -0.3)
-            }
-
-            await query(
-                `INSERT INTO memory_items (
-          id, tenant_id, project_id, type, title, content, tags,
-          embedding, verified, confidence, provenance_json, content_hash,
-          usefulness_score, created_at, updated_at, last_used_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                [
-                    id,
-                    tenantId,
-                    projectId,
-                    item.type,
-                    item.title,
-                    item.content,
-                    JSON.stringify(normalizeTags(item.tags)),
-                    embedding ? JSON.stringify(embedding) : null,
-                    item.verified ? 1 : 0,
-                    item.confidence || 0.5,
-                    JSON.stringify(item.provenance_json || {}),
-                    hash,
-                    initialScore,
-                    now(),
-                    now(),
-                    now()
-                ]
-            );
-
-            // AUTO-LINKING v1.0: Create knowledge graph links for better retrieval
-            // Run async to not block the main operation
-            try {
-                const suggestions = await suggestRelations(id, projectId, tenantId);
-                const linksCreated = [];
-
-                // Create top 3 suggested relations
-                for (const suggestion of suggestions.slice(0, 3)) {
-                    if (suggestion.confidence >= 0.4) {
-                        try {
-                            await addRelation({
-                                fromId: id,
-                                toId: suggestion.toId,
-                                relation: suggestion.suggestedRelation,
-                                weight: suggestion.confidence,
-                                metadata: { auto_created: true, source: 'upsert_auto_link' }
-                            });
-                            linksCreated.push({
-                                to: suggestion.toId,
-                                relation: suggestion.suggestedRelation
-                            });
-                        } catch (linkErr) {
-                            logger.debug('Auto-link creation failed', { error: linkErr.message });
-                        }
-                    }
-                }
-
-                if (linksCreated.length > 0) {
-                    logger.info('Auto-links created', { id, links_count: linksCreated.length });
-                }
-            } catch (autoLinkErr) {
-                logger.debug('Auto-linking skipped', { error: autoLinkErr.message });
-            }
-
-            return {
-                id,
-                version: 1,
-                status: 'active',
-                action: 'created'
-            };
-
-        }, {
-            maxRetries: 5,
-            shouldRetry: isRetryableError
-        });
-    });
-}
-
-/**
- * Write to audit log with is_error flag
- */
-async function writeAuditLog(traceId, toolName, request, response, projectId, tenantId, isError = false) {
-    try {
-        await query(
-            `INSERT INTO audit_log (id, trace_id, ts, tool_name, request_json, response_json, project_id, tenant_id, is_error)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            [
-                uuidv4(),
-                traceId,
-                now(),
-                toolName,
-                JSON.stringify(request),
-                JSON.stringify(response),
-                projectId,
-                tenantId,
-                isError ? 1 : 0
-            ]
-        );
-    } catch (err) {
-        logger.warn('Audit log write failed', { error: err.message });
-    }
-}
-
-/**
- * Build front-loaded embedding input string
- * Strategy: Put Title + Tags + Outcome BEFORE Content
- * This ensures the most important signals are within the 256-token window
- * of all-MiniLM-L6-v2
- * @param {object} item - Memory item
- * @returns {string} Optimized embedding input
- */
-function buildFrontLoadedEmbeddingInput(item) {
-    const parts = [];
-
-    // 1. Title (always first - highest signal)
-    parts.push(`TITLE: ${item.title}`);
-
-    // 2. Tags (high signal density)
-    const tags = normalizeTags(item.tags);
-    if (tags.length > 0) {
-        parts.push(`TAGS: ${tags.join(', ')}`);
-    }
-
-    // 3. Extract Outcome from content (for episodes) - critical info often at end
-    const content = item.content || '';
-    const outcomeMatch = content.match(/##\s*OUTCOME[:\s]*(.*?)(?=\n##|$)/is);
-    if (outcomeMatch && outcomeMatch[1]) {
-        const outcome = outcomeMatch[1].trim().substring(0, 200);
-        parts.push(`OUTCOME: ${outcome}`);
-    }
-
-    // 4. Extract Command from content (for episodes/runbooks)
-    const commandMatch = content.match(/Command:\s*(.*?)(?=\n|$)/i);
-    if (commandMatch && commandMatch[1]) {
-        parts.push(`CMD: ${commandMatch[1].trim().substring(0, 150)}`);
-    }
-
-    // 5. Content body (truncated to fit remaining token budget)
-    // Front-loaded parts ~100-200 chars, remaining budget ~800 chars for content
-    parts.push(content.substring(0, 800));
-
-    return parts.join(' | ');
-}
-
-/**
- * Find a fuzzy title match for update instead of creating duplicates
- * v5.1: Solves the "99.6% items v1" problem
- * 
- * Strategy:
- * 1. Extract keywords from new title
- * 2. Search recent items with same type+project
- * 3. Calculate Jaccard keyword overlap
- * 4. Return match only if ONE strong candidate (>= 60% overlap)
- * 5. If ambiguous (multiple candidates >= 60%), return null (create new = safe default)
- * 
- * @param {object} item - New item being upserted
- * @param {string} projectId 
- * @param {string} tenantId 
- * @returns {object|null} - Matching item or null
- */
-async function findFuzzyTitleMatch(item, projectId, tenantId) {
-    const newKeywords = extractKeywords(item.title);
-
-    // Need at least 2 keywords for meaningful comparison
-    if (newKeywords.length < 2) return null;
-
-    let candidates = [];
-
-    // STRATEGY 1: Use FTS to find candidates based on title keywords (more targeted, no time limit)
-    try {
-        const ftsQuery = newKeywords.slice(0, 5).map(k => `"${k}"*`).join(' OR ');
-        const ftsResults = await query(
-            `SELECT m.id, m.title, m.version, m.content_hash, m.tags, m.usefulness_score
-             FROM memory_items_fts fts
-             JOIN memory_items m ON fts.id = m.id
-             WHERE memory_items_fts MATCH ?
-               AND m.type = ? AND m.project_id = ? AND m.tenant_id = ? AND m.status = 'active'
-             LIMIT 100`,
-            [ftsQuery, item.type, projectId, tenantId]
-        );
-        if (ftsResults && ftsResults.length > 0) {
-            candidates = ftsResults;
-        }
-    } catch (ftsErr) {
-        logger.debug('FTS fuzzy search failed, falling back to recent items', { error: ftsErr.message });
-    }
-
-    // STRATEGY 2: Fallback to recent items if FTS found nothing (covers FTS desync)
-    if (candidates.length === 0) {
-        candidates = await query(
-            `SELECT id, title, version, content_hash, tags, usefulness_score FROM memory_items 
-             WHERE type = ? AND project_id = ? AND tenant_id = ? AND status = 'active'
-             ORDER BY updated_at DESC LIMIT 50`,
-            [item.type, projectId, tenantId]
-        );
-    }
-
-    if (!candidates || candidates.length === 0) return null;
-
-    // SAFEGUARD: Extract success/failure status from titles
-    // Prevent merging [FAILED] with [SUCCESS] items
-    const newTitleLower = item.title.toLowerCase();
-    const newIsFailure = newTitleLower.includes('[failed]') || newTitleLower.includes('[guardrail]') || newTitleLower.includes('[blocked]');
-    const newIsSuccess = newTitleLower.includes('[success]') || newTitleLower.includes('[achieved]');
-
-    let bestMatch = null;
-    let bestOverlap = 0;
-    let secondBestOverlap = 0;
-
-    for (const candidate of candidates) {
-        const candidateKeywords = extractKeywords(candidate.title);
-        if (candidateKeywords.length < 2) continue;
-
-        // SAFEGUARD: Skip if success/failure status differs
-        const candTitleLower = candidate.title.toLowerCase();
-        const candIsFailure = candTitleLower.includes('[failed]') || candTitleLower.includes('[guardrail]') || candTitleLower.includes('[blocked]');
-        const candIsSuccess = candTitleLower.includes('[success]') || candTitleLower.includes('[achieved]');
-        if ((newIsFailure && candIsSuccess) || (newIsSuccess && candIsFailure)) {
-            continue; // Different outcome status = different items
-        }
-
-        // Calculate Jaccard similarity: intersection / union
-        const intersection = newKeywords.filter(k => candidateKeywords.includes(k));
-        const unionSet = new Set([...newKeywords, ...candidateKeywords]);
-        const overlap = intersection.length / unionSet.size;
-
-        if (overlap > bestOverlap) {
-            secondBestOverlap = bestOverlap;
-            bestOverlap = overlap;
-            bestMatch = { ...candidate, _overlap: overlap };
-        } else if (overlap > secondBestOverlap) {
-            secondBestOverlap = overlap;
-        }
-    }
-
-    // SAFETY CHECKS:
-    // 1. Best match must be >= 60% overlap
-    if (!bestMatch || bestOverlap < 0.6) return null;
-
-    // 2. If second-best is also >= 55%, it's AMBIGUOUS — don't update
-    //    This prevents wrong matches when multiple similar items exist
-    if (secondBestOverlap >= 0.55) {
-        logger.debug('Fuzzy match ambiguous, creating new item', {
-            best: bestOverlap.toFixed(2),
-            second: secondBestOverlap.toFixed(2),
-            title: item.title
-        });
-        return null;
-    }
-
-    // 3. Must not be exact same content (that's handled by contentHash check already)
-    const newHash = contentHash(item.content);
-    if (bestMatch.content_hash === newHash) return null;
-
-    logger.info('Fuzzy title match found', {
-        new_title: item.title,
-        matched_title: bestMatch.title,
-        overlap: bestOverlap.toFixed(2),
-        matched_id: bestMatch.id
-    });
-
-    return bestMatch;
 }
 
 export default { definition, execute };

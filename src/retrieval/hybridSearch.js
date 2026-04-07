@@ -203,6 +203,10 @@ const USEFULNESS_DECAY_RATES = {
 function rankResults(results, weights) {
     const nowMs = Date.now();
 
+    // v5.3: Dynamic BM25 normalization — use actual max from result set instead of hardcoded /30
+    // Floor of 10 prevents tiny scores from inflating to 1.0
+    const maxKeywordScore = Math.max(10, ...results.map(r => r.keyword_score || 0));
+
     const scored = results.map(item => {
         // LAYER 3: Calculate recency with temporal type awareness
         const timestamp = item.updated_at || item.created_at;
@@ -215,8 +219,8 @@ function rankResults(results, weights) {
         // Deprecated penalty
         const deprecatedPenalty = item.status === 'deprecated' ? 0.7 : 1.0;
 
-        // Normalize keyword score (BM25 can be > 1)
-        const normalizedKeyword = Math.min(1.0, (item.keyword_score || 0) / 30);
+        // v5.3: Dynamic BM25 normalization (was hardcoded /30)
+        const normalizedKeyword = Math.min(1.0, (item.keyword_score || 0) / maxKeywordScore);
 
         // LAYER 4: Type priority boost
         const typePriority = TYPE_PRIORITY_BOOST[item.type] || 0;

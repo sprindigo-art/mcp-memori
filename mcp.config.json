@@ -1,38 +1,38 @@
 {
     "name": "mcp-memori",
-    "version": "1.0.0",
-    "description": "Production-grade MCP Memory Server",
+    "version": "7.0.0",
+    "description": "MCP Memory Server v7.0 — File-based .md Runbooks + Intelligence Layer (query expansion, reranking, fuzzy match, LRU cache, universal error/technique tracking)",
     "transport": {
         "type": "stdio"
     },
     "tools": [
         {
-            "name": "memory.search",
-            "description": "Cari memori berdasarkan query dengan hybrid search (vector + keyword + recency)"
+            "name": "memory_search",
+            "description": "Cari runbook dengan intelligent search (query expansion + reranking + target-tag boost + credential priority)"
         },
         {
-            "name": "memory.get",
-            "description": "Ambil detail lengkap satu memori berdasarkan ID"
+            "name": "memory_get",
+            "description": "Baca isi runbook. Support pagination (offset/limit) dan section filter untuk runbook besar. Tanpa parameter = auto-paginate jika terlalu besar."
         },
         {
-            "name": "memory.upsert",
-            "description": "Simpan atau update memori (idempotent, concurrency-safe)"
+            "name": "memory_upsert",
+            "description": "Simpan atau update runbook (.md file). Append-only: content lama TIDAK dihapus. WAJIB memory_get dulu jika runbook sudah ada."
         },
         {
-            "name": "memory.forget",
-            "description": "Soft-delete memori dengan alasan"
+            "name": "memory_forget",
+            "description": "Hapus teks/section/file dari runbook. WAJIB memory_get(id) dulu sebelum forget — agar tidak menghapus yang valid."
         },
         {
-            "name": "memory.summarize",
-            "description": "Ringkasan project: state terkini, keputusan, runbooks, guardrails"
+            "name": "memory_summarize",
+            "description": "Ringkasan project: daftar runbook dan statistik"
         },
         {
-            "name": "memory.feedback",
-            "description": "Beri feedback pada memori (useful/not_relevant/wrong)"
+            "name": "memory_stats",
+            "description": "Statistik storage: total runbook, ukuran, deleted count"
         },
         {
-            "name": "memory.maintain",
-            "description": "Maintenance: dedup, conflict detection, prune, compact, loopbreaker"
+            "name": "memory_list",
+            "description": "Browse semua runbook dengan filter tags, title, pagination"
         }
     ]
 }

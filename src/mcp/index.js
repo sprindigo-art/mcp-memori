@@ -1,5 +1,6 @@
 /**
- * MCP Tools Registry
+ * MCP Tools Registry v6.0 — File-based (.md runbooks)
+ * Removed: feedback, maintain, reflect (not needed for file storage)
  * @module mcp/index
  */
 import searchTool from './tools/memory.search.js';
@@ -7,14 +8,11 @@ import getTool from './tools/memory.get.js';
 import upsertTool from './tools/memory.upsert.js';
 import forgetTool from './tools/memory.forget.js';
 import summarizeTool from './tools/memory.summarize.js';
-import feedbackTool from './tools/memory.feedback.js';
-import maintainTool from './tools/memory.maintain.js';
 import statsTool from './tools/memory.stats.js';
-import reflectTool from './tools/memory.reflect.js';
 import listTool from './tools/memory.list.js';
 
 /**
- * All available tools
+ * All available tools (7 tools — was 10)
  */
 export const tools = {
     'memory_search': searchTool,
@@ -22,10 +20,7 @@ export const tools = {
     'memory_upsert': upsertTool,
     'memory_forget': forgetTool,
     'memory_summarize': summarizeTool,
-    'memory_feedback': feedbackTool,
-    'memory_maintain': maintainTool,
     'memory_stats': statsTool,
-    'memory_reflect': reflectTool,
     'memory_list': listTool
 };
 

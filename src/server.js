@@ -7,6 +7,7 @@ import { createInterface } from 'readline';
 import { initDb, closeDb, getDbType } from './db/index.js';
 import { getToolDefinitions, executeTool, hasTool } from './mcp/index.js';
 import { getEmbeddingMode } from './utils/embedding.js';
+import { initSearchIndex } from './storage/searchIndex.js';
 import logger from './utils/logger.js';
 
 // Protocol version
@@ -45,13 +46,21 @@ class McpServer {
             await this.handleLine(line);
         });
 
-        // Initialize database asynchronously (don't block start)
+        // v6.0: File-based storage — DB init is optional (legacy)
         try {
             await initDb();
-            logger.info('Database initialized', { db: getDbType() });
+            logger.info('Legacy DB available', { db: getDbType() });
         } catch (err) {
-            logger.error('Database initialization failed', { error: err.message });
-            process.exit(1);
+            logger.info('No legacy DB — using file-based storage only', { error: err.message });
+        }
+        logger.info('Storage: filesystem (.md runbooks)', { dir: '/home/kali/Desktop/mcp-memori/runbooks' });
+
+        // v7.1: Initialize FTS5 search index for fast runbook search
+        try {
+            initSearchIndex();
+            logger.info('FTS5 search index ready');
+        } catch (err) {
+            logger.warn('FTS5 search index init failed (search will fallback to file scan)', { error: err.message });
         }
     }
 
@@ -167,10 +176,15 @@ class McpServer {
             const toolResult = await executeTool(params.name, params.arguments || {});
 
             // Format result according to MCP spec (content array)
+            // Jika tool return __plaintext, kirim text langsung tanpa JSON.stringify
+            const outputText = toolResult?.__plaintext
+                ? toolResult.text
+                : JSON.stringify(toolResult, null, 2);
+
             const result = {
                 content: [{
                     type: 'text',
-                    text: JSON.stringify(toolResult, null, 2)
+                    text: outputText
                 }],
                 isError: false
             };
