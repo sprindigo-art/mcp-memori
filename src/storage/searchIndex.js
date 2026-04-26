@@ -15,6 +15,8 @@ import { existsSync, readdirSync, readFileSync, statSync, mkdirSync } from 'fs';
 import { join, basename } from 'path';
 import { RUNBOOKS_DIR, parseFrontmatter, filenameToTitle } from './files.js';
 import logger from '../utils/logger.js';
+import { initVectorIndex } from './vectorIndex.js';
+import { initGraphIndex, rebuildGraphIndex } from './graphIndex.js';
 
 const INDEX_DB_PATH = '/home/kali/Desktop/mcp-memori/data/search_index.db';
 
@@ -83,10 +85,29 @@ export function initSearchIndex() {
             END
         `);
 
+        db.exec(`
+            CREATE TABLE IF NOT EXISTS observations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                runbook_id TEXT,
+                tool_name TEXT,
+                tool_input_summary TEXT,
+                tool_response_summary TEXT,
+                content_hash TEXT UNIQUE,
+                timestamp TEXT DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_obs_ts ON observations(timestamp)`);
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_obs_runbook ON observations(runbook_id)`);
+
         logger.info('Search index DB initialized', { path: INDEX_DB_PATH });
 
         // Build/rebuild index from .md files
         rebuildIndex();
+
+        // v7.5: Initialize vector + graph index (additive layers)
+        initVectorIndex(db);
+        initGraphIndex(db);
+        rebuildGraphIndex(); // Fast — no embeddings, just frontmatter parsing
 
         indexReady = true;
         return true;
@@ -338,6 +359,13 @@ export function getIndexStats() {
     } catch { return { ready: false }; }
 }
 
+/**
+ * Get shared db handle (for vector/graph modules)
+ */
+export function getDb() {
+    return db;
+}
+
 export default {
     initSearchIndex,
     updateIndexEntry,
@@ -346,5 +374,6 @@ export default {
     getAccessCount,
     ftsSearch,
     isIndexReady,
-    getIndexStats
+    getIndexStats,
+    getDb
 };

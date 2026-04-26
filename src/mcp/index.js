@@ -10,9 +10,10 @@ import forgetTool from './tools/memory.forget.js';
 import summarizeTool from './tools/memory.summarize.js';
 import statsTool from './tools/memory.stats.js';
 import listTool from './tools/memory.list.js';
+import autologTool from './tools/memory.autolog.js';
 
 /**
- * All available tools (7 tools — was 10)
+ * All available tools (8 tools — v7.6 added memory_autolog for hook-driven capture)
  */
 export const tools = {
     'memory_search': searchTool,
@@ -21,7 +22,8 @@ export const tools = {
     'memory_forget': forgetTool,
     'memory_summarize': summarizeTool,
     'memory_stats': statsTool,
-    'memory_list': listTool
+    'memory_list': listTool,
+    'memory_autolog': autologTool
 };
 
 /**

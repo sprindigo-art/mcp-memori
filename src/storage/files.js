@@ -4,8 +4,75 @@
  * v7.0: Query expansion, fuzzy title matching, better scoring, recency decay
  * @module storage/files
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, unlinkSync, statSync, renameSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, unlinkSync, statSync, renameSync, copyFileSync } from 'fs';
 import { join, basename } from 'path';
+
+/**
+ * v7.5: Simple file lock — prevent concurrent write corruption
+ * Uses .lock file with 5-second timeout (research: race condition in MCP concurrent writes)
+ * Non-blocking: if lock held >5s, force-acquire (stale lock from crash)
+ */
+function acquireLock(filepath) {
+    const lockPath = filepath + '.lock';
+    const maxWaitMs = 5000;
+    const start = Date.now();
+    while (existsSync(lockPath)) {
+        const lockAge = Date.now() - statSync(lockPath).mtimeMs;
+        if (lockAge > maxWaitMs) {
+            // Stale lock from crashed process — force remove
+            try { unlinkSync(lockPath); } catch {}
+            break;
+        }
+        if (Date.now() - start > maxWaitMs) {
+            // Timeout waiting — force acquire
+            try { unlinkSync(lockPath); } catch {}
+            break;
+        }
+        // Busy-wait 10ms
+        const until = Date.now() + 10;
+        while (Date.now() < until) { /* spin */ }
+    }
+    writeFileSync(lockPath, String(process.pid), 'utf8');
+}
+
+function releaseLock(filepath) {
+    const lockPath = filepath + '.lock';
+    try { unlinkSync(lockPath); } catch {}
+}
+
+/**
+ * v7.4: ATOMIC WRITE — crash-safe file writing
+ * Write to .tmp first, then rename (atomic on POSIX).
+ * Also creates .bak backup of existing file for recovery.
+ * v7.5: Added file locking for concurrent write protection
+ * Prevents: crash mid-write = corrupt file (riset: DEV.to "Three Memory Mistakes")
+ */
+/**
+ * Export lock primitives so callers can hold lock across read+modify+write
+ * (prevents TOCTOU race when concurrent writers compute diffs on stale body).
+ */
+export { acquireLock, releaseLock };
+
+export function atomicWriteFileSync(filepath, content, encoding = 'utf8') {
+    const tmpPath = filepath + '.tmp';
+    const bakPath = filepath + '.bak';
+
+    acquireLock(filepath);
+    try {
+        // Backup existing file (if exists) for recovery
+        if (existsSync(filepath)) {
+            try { copyFileSync(filepath, bakPath); } catch {}
+        }
+
+        // Write to .tmp first
+        writeFileSync(tmpPath, content, encoding);
+
+        // Atomic rename: .tmp → target (POSIX atomic)
+        renameSync(tmpPath, filepath);
+    } finally {
+        releaseLock(filepath);
+    }
+}
 import logger from '../utils/logger.js';
 import { ftsSearch, isIndexReady, incrementAccessCount } from './searchIndex.js';
 
@@ -141,6 +208,171 @@ function filterNoiseTags(tags) {
 }
 
 /**
+ * SUB-HEADING patterns — NOT standalone sections, metadata within an entry.
+ * Shared utility: used by memory.get (sections_list) AND memory.upsert (replace/append)
+ */
+const SUB_HEADING_PATTERNS = [
+    /^target:/i,
+    /^date:/i,
+    /^status:/i,
+    /^outcome:/i,
+    /^source:/i,
+    /^step\s+\d/i,
+    /^type:/i,
+    /^tags:/i,
+    /^how to use/i,
+    /^commands?\s+executed/i,
+];
+
+/**
+ * Detect if a ## heading is a MAJOR section boundary or just a sub-heading.
+ * BLACKLIST approach: ALL ## headings are major EXCEPT known sub-heading patterns.
+ */
+export function isMajorSection(heading) {
+    const clean = heading.replace(/^## /, '').trim();
+    if (!clean) return false;
+    if (clean.startsWith('[')) return true;
+    if (clean.startsWith('---')) return true;
+    for (const pattern of SUB_HEADING_PATTERNS) {
+        if (pattern.test(clean)) return false;
+    }
+    return true;
+}
+
+/**
+ * Find char offset where a section ENDS (next MAJOR ## heading or EOF).
+ * Respects isMajorSection — sub-headings do NOT terminate a section.
+ * @param {string} body - Full body text
+ * @param {number} sectionStartOffset - Char offset where section starts
+ * @returns {number} Char offset where next major section starts (or body.length)
+ */
+export function findSectionEnd(body, sectionStartOffset) {
+    const remaining = body.substring(sectionStartOffset);
+    const lines = remaining.split('\n');
+    let charOffset = sectionStartOffset;
+
+    // Skip first line (the section header itself)
+    charOffset += lines[0].length + 1;
+
+    for (let i = 1; i < lines.length; i++) {
+        const line = lines[i];
+        if (line.startsWith('## ') && isMajorSection(line)) {
+            return charOffset;
+        }
+        charOffset += line.length + 1;
+    }
+    return body.length;
+}
+
+/**
+ * Append content to the END of an existing section, preserving ALL existing content.
+ * If section doesn't exist, creates it at end of body.
+ * ANTI-DUPLICATE: skip if newContent already exists in section.
+ * @param {string} body - Runbook body (without frontmatter)
+ * @param {string} sectionName - Section name (e.g. "CREDENTIAL", "GAGAL")
+ * @param {string} newContent - Content to append
+ * @returns {{body: string, action: string}} Updated body + action taken
+ */
+export function appendToSection(body, sectionName, newContent) {
+    const sectionHeader = sectionName.startsWith('## ') ? sectionName : `## ${sectionName}`;
+    const escapedHeader = sectionHeader.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const headerRegex = new RegExp(`^${escapedHeader}`, 'im');
+    const match = headerRegex.exec(body);
+
+    if (!match) {
+        // Section not found — create at end (with provenance stamp)
+        let createContent = newContent.trim();
+        const hasDate = /^\d{4}-\d{2}-\d{2}|^### \d{4}|^- \d{4}|^\[\d{4}/.test(createContent);
+        if (!hasDate && createContent.length > 20) {
+            const now = new Date().toISOString().split('T')[0];
+            createContent = `[${now}] ${createContent}`;
+        }
+        return {
+            body: body.trimEnd() + `\n\n${sectionHeader}\n${createContent}\n`,
+            action: 'section_created'
+        };
+    }
+
+    const sectionStart = match.index;
+    const sectionEnd = findSectionEnd(body, sectionStart);
+    const existingSection = body.substring(sectionStart, sectionEnd);
+
+    // Anti-duplicate: EXACT match — skip if content already in section
+    if (existingSection.includes(newContent.trim())) {
+        return { body, action: 'skipped_duplicate' };
+    }
+
+    // Anti-duplicate: NEAR-DUPLICATE — skip if >80% of lines already exist
+    // Uses core-fragment matching: strip markdown/punctuation, match leading 30+ chars
+    const newLines = newContent.trim().split('\n').map(l => l.trim()).filter(l => l.length > 10);
+    if (newLines.length >= 2) {
+        const existingLower = existingSection.toLowerCase();
+        const matchedLines = newLines.filter(l => {
+            const lineLower = l.toLowerCase();
+            // Exact substring match
+            if (existingLower.includes(lineLower)) return true;
+            // Core-fragment match: strip trailing punc, match leading 30+ chars
+            const core = lineLower.replace(/[\)\]\}\.\,\;]+$/, '').trim();
+            return core.length >= 30 && existingLower.includes(core);
+        });
+        const matchRatio = matchedLines.length / newLines.length;
+        if (matchRatio >= 0.8) {
+            return { body, action: 'skipped_near_duplicate', match_ratio: Math.round(matchRatio * 100) };
+        }
+    }
+
+    // v7.5: Expanded contradiction detection (research: Frederick Smith "Contradictory Memories" §7.1)
+    // Detects conflicting states between new content and existing section
+    let contradiction = null;
+    const newLower = newContent.toLowerCase();
+    const existLower = existingSection.toLowerCase();
+    const contradictionPairs = [
+        ['alive', 'dead'],        // credential/service status
+        ['dead', 'alive'],
+        ['patched', 'vulnerable'], // vulnerability status
+        ['vulnerable', 'patched'],
+        ['open', 'closed'],       // port status
+        ['closed', 'open'],
+        ['up', 'down'],           // service status
+        ['running', 'stopped'],
+        ['valid', 'invalid'],     // credential validity
+        ['invalid', 'valid'],
+        ['success', 'failed'],    // exploit result
+        ['berhasil', 'gagal'],    // Indonesian equivalents
+        ['gagal', 'berhasil'],
+        ['accessible', 'unreachable'],
+        ['unreachable', 'accessible'],
+        ['enabled', 'disabled'],
+        ['root', 'unprivileged'], // privilege level
+    ];
+    for (const [newState, existState] of contradictionPairs) {
+        if (newLower.includes(newState) && existLower.includes(existState)) {
+            contradiction = `WARNING: New content contains "${newState}" but existing section contains "${existState}". Review with replace_section if old data is invalid.`;
+            break;
+        }
+    }
+
+    // v7.5: Auto-provenance stamp — prepend date if content doesn't have one (research: MintMCP "provenance tracking")
+    let stampedContent = newContent.trim();
+    const hasDateStamp = /^\d{4}-\d{2}-\d{2}|^### \d{4}|^- \d{4}|^\[\d{4}/.test(stampedContent);
+    if (!hasDateStamp && stampedContent.length > 20) {
+        const now = new Date().toISOString().split('T')[0];
+        stampedContent = `[${now}] ${stampedContent}`;
+    }
+
+    // Append new content at END of section (before next major section)
+    const updatedSection = existingSection.trimEnd() + '\n' + stampedContent + '\n';
+    const before = body.substring(0, sectionStart);
+    const after = body.substring(sectionEnd);
+    const result = {
+        body: before + updatedSection + '\n' + after,
+        action: 'section_appended'
+    };
+    if (contradiction) result.contradiction = contradiction;
+    return result;
+}
+
+/**
  * Extract keywords from text for fuzzy matching (stopwords removed)
  */
 function extractMatchKeywords(text) {
@@ -159,17 +391,57 @@ function extractMatchKeywords(text) {
 }
 
 /**
- * v7.0: Fuzzy title matching — find existing runbook with similar title
- * Uses Jaccard keyword overlap >= 0.6 to match
- * Prevents duplicate files when title wording slightly differs
+ * v7.4: Fuzzy title matching — find existing runbook with similar title
+ * v7.4 FIX: Added DOMAIN-AWARE pre-matching for [RUNBOOK] titles.
+ * "[RUNBOOK] bappenas" must match "[RUNBOOK] bappenas.go.id" without Jaccard.
  * @param {string} newTitle - Title being saved
  * @returns {string|null} filepath of matched runbook, or null
  */
-function findByFuzzyTitle(newTitle) {
+export function findByFuzzyTitle(newTitle) {
+    const files = readdirSync(RUNBOOKS_DIR).filter(f => f.endsWith('.md'));
+
+    // v7.5 FIX: DOMAIN-AWARE PRE-MATCH runs FIRST (before keyword length check)
+    // "[RUNBOOK] unitomo" has only 1 keyword but MUST match "unitomo.ac.id"
+    // Extract target name after bracket prefix and compare directly
+    const bracketMatch = newTitle.match(/^\[(?:RUNBOOK|TEKNIK)\]\s*(.+)/i);
+    if (bracketMatch) {
+        const newTarget = bracketMatch[1].trim().toLowerCase();
+        for (const file of files) {
+            const filepath = join(RUNBOOKS_DIR, file);
+            let raw;
+            try { raw = readFileSync(filepath, 'utf8'); } catch { continue; }
+            const { meta } = parseFrontmatter(raw);
+            const existingTitle = meta.title || filenameToTitle(file);
+            const existBracket = existingTitle.match(/^\[(?:RUNBOOK|TEKNIK)\]\s*(.+)/i);
+            if (!existBracket) continue;
+            const existTarget = existBracket[1].trim().toLowerCase();
+
+            // Exact domain match
+            if (newTarget === existTarget) {
+                logger.info('DOMAIN EXACT MATCH', { newTitle, matched: file });
+                return filepath;
+            }
+            // Partial domain match: "bappenas" matches "mandata.bappenas.go.id"
+            // But "go.id" must NOT match "bappenas.go.id" (too generic)
+            // v7.5: Lowered ratio to 0.3 for targets ≥ 6 chars (e.g. "bappenas" = 8 chars, meaningful)
+            // But generic TLDs like "go.id", "ac.id", "com" must NOT match (< 6 chars or common suffix)
+            const isGenericSuffix = /^(go\.id|ac\.id|or\.id|co\.id|com|net|org|edu)$/i.test(newTarget);
+            const minRatio = newTarget.length >= 6 ? 0.3 : 0.4;
+            if (!isGenericSuffix && newTarget.length >= 4 && existTarget.includes(newTarget) && newTarget.length >= existTarget.length * minRatio) {
+                logger.info('DOMAIN PARTIAL MATCH', { newTitle, matched: file, newTarget, existTarget });
+                return filepath;
+            }
+            if (existTarget.length >= 4 && newTarget.includes(existTarget) && existTarget.length >= newTarget.length * 0.4) {
+                logger.info('DOMAIN PARTIAL MATCH (reverse)', { newTitle, matched: file, newTarget, existTarget });
+                return filepath;
+            }
+        }
+    }
+
+    // Keyword-based Jaccard matching (fallback) — needs at least 2 keywords
     const newKeywords = extractMatchKeywords(newTitle);
     if (newKeywords.length < 2) return null;
 
-    const files = readdirSync(RUNBOOKS_DIR).filter(f => f.endsWith('.md'));
     let bestMatch = null;
     let bestOverlap = 0;
     let secondBestOverlap = 0;
@@ -283,7 +555,7 @@ export function saveRunbook(title, content, tags = [], options = {}) {
         const newBody = existingBody + '\n\n' + newContent;
         const newFile = buildFrontmatter(meta) + newBody + '\n';
 
-        writeFileSync(filepath, newFile, 'utf8');
+        atomicWriteFileSync(filepath, newFile, 'utf8');
         logger.info('RUNBOOK APPENDED', {
             filename, title,
             old_length: existingBody.length,
@@ -306,7 +578,7 @@ export function saveRunbook(title, content, tags = [], options = {}) {
         if (options.success !== undefined) meta.success = options.success;
 
         const fileContent = buildFrontmatter(meta) + newContent + '\n';
-        writeFileSync(filepath, fileContent, 'utf8');
+        atomicWriteFileSync(filepath, fileContent, 'utf8');
         logger.info('RUNBOOK CREATED', { filename, title, size: fileContent.length });
 
         return { id: filename, action: 'created', filepath, version: 1 };
@@ -331,7 +603,23 @@ export function readRunbook(id) {
         }
     }
 
-    const raw = readFileSync(filepath, 'utf8');
+    // v7.4: Auto-recovery from corrupt file — try .bak if main file is unreadable/corrupt
+    let raw;
+    try {
+        raw = readFileSync(filepath, 'utf8');
+        if (!raw || raw.length < 5) throw new Error('File empty or too small');
+    } catch (readErr) {
+        const bakPath = filepath + '.bak';
+        if (existsSync(bakPath)) {
+            logger.warn('CORRUPT FILE RECOVERY: Using .bak backup', { filepath, error: readErr.message });
+            raw = readFileSync(bakPath, 'utf8');
+            // Restore backup to main file
+            try { copyFileSync(bakPath, filepath); } catch {}
+        } else {
+            logger.error('File unreadable and no backup', { filepath, error: readErr.message });
+            return null;
+        }
+    }
     const { meta, body } = parseFrontmatter(raw);
     const stat = statSync(filepath);
 
@@ -485,60 +773,81 @@ function expandQueryWords(queryStr) {
  * Instead of returning first 500 chars (which is usually TOC/recon),
  * find WHERE the keyword appears and return context around it
  */
-function extractContextSnippet(body, queryWords, maxLen = 600) {
+function extractContextSnippet(body, queryWords, maxLen = 1200) {
     if (!queryWords.length || !body) return body.substring(0, maxLen);
 
     const bodyLower = body.toLowerCase();
 
+    // v7.4: Helper to extract section name for context
+    function getSectionName(text) {
+        const match = text.match(/^## ([^\n]+)/);
+        return match ? match[1].trim() : null;
+    }
+
     // PRIORITY 1: Find exact multi-word phrase match first (e.g. "pujeyden.fokuswarta.id")
-    // Join query words that look like a domain/hostname and search as phrase
     const fullQuery = queryWords.join(' ').toLowerCase();
     const domainLike = queryWords.filter(w => w.includes('.') || w.length > 8);
     for (const term of domainLike) {
         const idx = bodyLower.indexOf(term.toLowerCase());
         if (idx !== -1) {
-            // Found exact domain/hostname — return generous context around it
             const start = Math.max(0, idx - 200);
-            return body.substring(start, start + maxLen).trim();
+            const raw = body.substring(start, start + maxLen).trim();
+            // v7.4: Find which section this belongs to
+            const beforeMatch = body.substring(0, idx);
+            const lastSectionHeader = beforeMatch.match(/## ([^\n]+)/g);
+            const sectionCtx = lastSectionHeader ? `[${lastSectionHeader[lastSectionHeader.length - 1].replace('## ', '')}] ` : '';
+            return sectionCtx + raw;
         }
     }
 
-    // PRIORITY 2: Find section where MOST ORIGINAL query words co-occur (not expanded)
+    // PRIORITY 2: Find section where MOST ORIGINAL query words co-occur
+    // Separate original words from expanded — original get 3x weight
+    const originalWordsSet = new Set((queryWords._originalWords || queryWords).map(w => w.toLowerCase()));
     const sections = body.split(/(?=^## )/m);
     let bestSection = null;
     let bestSectionScore = 0;
+    let bestSectionName = '';
 
     for (const section of sections) {
         const sectionLower = section.toLowerCase();
+        // Skip _AUTO_LOG and SESSION LOG sections — these are noise for snippets
+        if (sectionLower.startsWith('## _auto_log') || sectionLower.startsWith('## session log')) continue;
         let sectionScore = 0;
-        let uniqueWordsMatched = 0;
+        let uniqueOriginalMatched = 0;
+        let uniqueExpandedMatched = 0;
         for (const word of queryWords) {
             const matches = sectionLower.split(word).length - 1;
             if (matches > 0) {
-                sectionScore += Math.min(5, matches); // Cap per-word to avoid single-keyword-heavy sections winning
-                uniqueWordsMatched++;
+                const isOriginal = originalWordsSet.has(word);
+                sectionScore += Math.min(5, matches) * (isOriginal ? 3 : 1);
+                if (isOriginal) uniqueOriginalMatched++;
+                else uniqueExpandedMatched++;
             }
         }
-        // Bonus: more unique query words matched = better section
-        sectionScore *= (1 + uniqueWordsMatched * 0.3);
+        // Bonus for co-occurrence of ORIGINAL words (not expanded)
+        sectionScore *= (1 + uniqueOriginalMatched * 0.5 + uniqueExpandedMatched * 0.1);
+        // Density bonus: smaller sections with many matches = more relevant
+        const sectionLen = section.length;
+        if (sectionLen < 5000 && uniqueOriginalMatched >= 2) sectionScore *= 1.3;
         if (sectionScore > bestSectionScore) {
             bestSectionScore = sectionScore;
             bestSection = section;
+            bestSectionName = getSectionName(section) || '';
         }
     }
 
-    // If found a matching section, return context around the best keyword match within it
+    // If found a matching section, return context with SECTION NAME prefix
     if (bestSection && bestSectionScore > 0) {
-        // Try to find the most specific query word within the section
+        const sectionPrefix = bestSectionName ? `[${bestSectionName}] ` : '';
         const sectionLower = bestSection.toLowerCase();
         for (const word of [...domainLike, ...queryWords]) {
             const idx = sectionLower.indexOf(word.toLowerCase());
             if (idx !== -1) {
                 const start = Math.max(0, idx - 150);
-                return bestSection.substring(start, start + maxLen).trim();
+                return sectionPrefix + bestSection.substring(start, start + maxLen).trim();
             }
         }
-        return bestSection.substring(0, maxLen).trim();
+        return sectionPrefix + bestSection.substring(0, maxLen).trim();
     }
 
     // Fallback: find first occurrence of any query word and return context
@@ -581,6 +890,7 @@ export function searchRunbooks(queryStr, options = {}) {
             const enriched = [];
             const originalWords = (queryStr || '').toLowerCase().split(/\s+/).filter(w => w.length >= 2);
             const queryWords = expandQueryWords(queryStr);
+            queryWords._originalWords = originalWords;
 
             for (const fts of ftsResults) {
                 const filepath = join(RUNBOOKS_DIR, fts.id);
@@ -644,6 +954,7 @@ export function searchRunbooks(queryStr, options = {}) {
     // v7.0: Use expanded query words (original + synonyms) for better recall
     const originalWords = (queryStr || '').toLowerCase().split(/\s+/).filter(w => w.length >= 2);
     const queryWords = expandQueryWords(queryStr);
+    queryWords._originalWords = originalWords;
     const queryLower = (queryStr || '').toLowerCase();
 
     const results = [];
@@ -895,7 +1206,7 @@ export function getStats() {
     };
 }
 
-export { filterNoiseTags };
+export { filterNoiseTags, SUB_HEADING_PATTERNS };
 
 export default {
     RUNBOOKS_DIR,
@@ -912,5 +1223,8 @@ export default {
     deleteRunbook,
     getStats,
     expandQueryWords,
-    filterNoiseTags
+    filterNoiseTags,
+    isMajorSection,
+    findSectionEnd,
+    appendToSection
 };

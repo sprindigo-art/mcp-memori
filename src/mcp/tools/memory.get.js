@@ -4,7 +4,7 @@
  * v7.0: LRU cache untuk reduce filesystem I/O
  * @module mcp/tools/memory.get
  */
-import { readRunbook } from '../../storage/files.js';
+import { readRunbook, isMajorSection } from '../../storage/files.js';
 import { confirmRead } from './memory.forget.js';
 import { incrementAccessCount } from '../../storage/searchIndex.js';
 import logger from '../../utils/logger.js';
@@ -49,51 +49,7 @@ export function getGetCacheStats() {
     return { size: getCache.size, hits: cacheHits, misses: cacheMisses };
 }
 
-/**
- * SUB-HEADING patterns — these are NOT standalone sections, they're metadata within an entry.
- * Everything else with ## = major section boundary.
- * v7.3: BLACKLIST approach (was whitelist with only 18 sections — too restrictive,
- * caused real sections like INTERNAL NETWORK SCAN, MYSQL DATABASE DUMP, etc. to be invisible)
- */
-const SUB_HEADING_PATTERNS = [
-    /^target:/i,      // ## TARGET: jdihpu.fokuswarta.id
-    /^date:/i,        // ## Date: Mar 14, 2026
-    /^status:/i,      // ## STATUS: ACTIVE
-    /^outcome:/i,     // ## OUTCOME: SUCCESS
-    /^source:/i,      // ## SOURCE: auto-saved
-    /^step\s+\d/i,    // ## STEP 1: ..., ## STEP 2: ...
-    /^type:/i,        // ## Type: episode
-    /^tags:/i,        // ## Tags: [...]
-    /^how to use/i,   // ## HOW TO USE:
-    /^commands?\s+executed/i, // ## COMMANDS EXECUTED:
-];
-
-/**
- * Detect if a ## heading is a MAJOR section boundary or just a sub-heading within an entry.
- * v7.3: BLACKLIST approach — ALL ## headings are major EXCEPT known sub-heading patterns.
- * This ensures sections like INTERNAL NETWORK SCAN, MYSQL DATABASE DUMP, PIVOT RESULTS,
- * CHROME DECRYPT PROGRESS, etc. are all recognized without needing to whitelist each one.
- */
-function isMajorSection(heading) {
-    const clean = heading.replace(/^## /, '').trim();
-
-    // Empty heading = not a section
-    if (!clean) return false;
-
-    // Tagged entries always major: ## [CRED] ..., ## [STATE] ..., etc.
-    if (clean.startsWith('[')) return true;
-
-    // "--- MIGRATED" markers always major
-    if (clean.startsWith('---')) return true;
-
-    // Check if it matches a known sub-heading pattern → NOT major
-    for (const pattern of SUB_HEADING_PATTERNS) {
-        if (pattern.test(clean)) return false;
-    }
-
-    // Everything else = major section (BLACKLIST approach)
-    return true;
-}
+// isMajorSection imported from ../../storage/files.js (shared utility)
 
 /**
  * Parse content into major sections (entry-level boundaries)
@@ -209,9 +165,25 @@ export async function execute(params) {
         // NOTE: sections_list ALONE does NOT unlock upsert — must also read content
         if (sections_list) {
             confirmRead(item.id, 'sections_list', 0);
+
+            // v7.5 Aturan 15: Section health analysis
+            const emptySections = majorSections.filter(s => {
+                const bodyOnly = (s.content || '').replace(/^##[^\n]*\n/, '').trim();
+                return bodyOnly.length < 10;
+            });
+            const largestSection = majorSections.reduce((max, s) => (s.content || '').length > (max.content || '').length ? s : max, majorSections[0] || { content: '' });
+            const healthNotes = [];
+            if (emptySections.length > 0) {
+                healthNotes.push(`⚠️ ${emptySections.length} section kosong: ${emptySections.map(s => s.cleanName).slice(0, 5).join(', ')}`);
+            }
+            if (largestSection && (largestSection.content || '').length > 50000) {
+                healthNotes.push(`⚠️ Section "${largestSection.cleanName}" terlalu besar (${Math.round((largestSection.content || '').length / 1024)}KB) — pertimbangkan split`);
+            }
+            const healthStr = healthNotes.length > 0 ? '\n\n**Health:** ' + healthNotes.join(' | ') : '';
+
             return {
                 __plaintext: true,
-                text: `# ${item.title} — SECTIONS INDEX\n\nTotal: ${totalChars} chars | ${majorSections.length} major sections\n\n` +
+                text: `# ${item.title} — SECTIONS INDEX\n\nTotal: ${totalChars} chars | ${majorSections.length} major sections${healthStr}\n\n` +
                     majorSections.map((s, i) => {
                         const size = s.content ? s.content.length : 0;
                         // Preview: first 150 chars of section content (strip heading line)
@@ -323,7 +295,28 @@ export async function execute(params) {
         // v7.1: Track usefulness — increment access count in search index
         try { incrementAccessCount(item.id); } catch {}
 
+        // v7.5: Health warnings — stale data + bloat detection (from research)
+        const warnings = [];
+        const itemUpdated = item.updated_at || item.updated;
+        if (itemUpdated) {
+            const updatedDate = new Date(itemUpdated);
+            const daysSinceUpdate = Math.floor((Date.now() - updatedDate.getTime()) / (1000 * 60 * 60 * 24));
+            if (daysSinceUpdate > 30) {
+                warnings.push(`⚠️ STALE: Runbook belum di-update ${daysSinceUpdate} hari. Data mungkin OUTDATED — verifikasi sebelum gunakan.`);
+            }
+        }
+        if (totalChars > 200000) {
+            warnings.push(`⚠️ BLOAT: Runbook ${Math.round(totalChars/1024)}KB — pertimbangkan split/archive section yang tidak aktif.`);
+        }
+        const itemVersion = item.version || 1;
+        if (itemVersion > 50) {
+            warnings.push(`ℹ️ MATURE: v${itemVersion} — runbook ini sudah berkembang ${itemVersion}x. Keep evolving!`);
+        }
+
         let header = `# ${item.title}`;
+        if (warnings.length > 0) {
+            header += '\n\n' + warnings.join('\n');
+        }
         if (totalChars > effectiveLimit || offset > 0) {
             header += `\n\n> **Pagination**: chars ${offset}-${offset + chunk.length} of ${totalChars}` +
                 (hasMore ? ` | **Next**: memory_get({id:"${item.id}", offset:${offset + effectiveLimit}}) | ${remaining} chars remaining` : ' | **END**');

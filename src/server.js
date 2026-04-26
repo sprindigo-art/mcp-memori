@@ -8,6 +8,7 @@ import { initDb, closeDb, getDbType } from './db/index.js';
 import { getToolDefinitions, executeTool, hasTool } from './mcp/index.js';
 import { getEmbeddingMode } from './utils/embedding.js';
 import { initSearchIndex } from './storage/searchIndex.js';
+import { rebuildVectorIndex } from './storage/vectorIndex.js';
 import logger from './utils/logger.js';
 
 // Protocol version
@@ -62,6 +63,11 @@ class McpServer {
         } catch (err) {
             logger.warn('FTS5 search index init failed (search will fallback to file scan)', { error: err.message });
         }
+
+        // v7.5: Background vector index rebuild (async, non-blocking)
+        rebuildVectorIndex()
+            .then(stats => logger.info('Vector index ready', stats))
+            .catch(err => logger.warn('Vector index rebuild failed (non-fatal)', { error: err.message }));
     }
 
     /**

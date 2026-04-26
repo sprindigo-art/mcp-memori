@@ -4,6 +4,8 @@
  * @module mcp/tools/memory.search
  */
 import { searchRunbooks } from '../../storage/files.js';
+import { vectorSearchRunbooks, isVectorReady } from '../../storage/vectorIndex.js';
+import { queryGraph, findRelatedEntities, getEntityStats } from '../../storage/graphIndex.js';
 import { v4 as uuidv4 } from 'uuid';
 import logger from '../../utils/logger.js';
 
@@ -86,9 +88,50 @@ function rerankResults(results, originalQuery) {
     });
 }
 
+/**
+ * v7.5: Reciprocal Rank Fusion — merge FTS5 + vector results
+ * RRF score = sum(1 / (k + rank)) for each list the doc appears in
+ * @param {Array} ftsResults - FTS5 BM25 results (already ranked)
+ * @param {Array} vectorResults - Vector similarity results [{id, similarity}]
+ * @param {number} k - RRF constant (default 60)
+ * @returns {Array} Merged results with rrf_score
+ */
+function rrfMerge(ftsResults, vectorResults, k = 60) {
+    const scores = new Map();
+    const itemData = new Map();
+
+    // FTS5 ranks
+    for (let i = 0; i < ftsResults.length; i++) {
+        const id = ftsResults[i].id;
+        scores.set(id, (scores.get(id) || 0) + 1 / (k + i + 1));
+        itemData.set(id, ftsResults[i]);
+    }
+
+    // Vector ranks
+    for (let i = 0; i < vectorResults.length; i++) {
+        const id = vectorResults[i].id;
+        scores.set(id, (scores.get(id) || 0) + 1 / (k + i + 1));
+        // Only set itemData if not already from FTS (FTS has richer data)
+        if (!itemData.has(id)) {
+            itemData.set(id, { id, score: 0, vector_similarity: vectorResults[i].similarity });
+        } else {
+            itemData.get(id).vector_similarity = vectorResults[i].similarity;
+        }
+    }
+
+    // Build merged result sorted by RRF score
+    const merged = [];
+    for (const [id, rrfScore] of scores) {
+        const item = itemData.get(id);
+        merged.push({ ...item, score: rrfScore * 100, rrf_score: rrfScore });
+    }
+    merged.sort((a, b) => b.rrf_score - a.rrf_score);
+    return merged;
+}
+
 export const definition = {
     name: 'memory_search',
-    description: 'Cari runbook berdasarkan query dengan intelligent search (query expansion + reranking + target-tag boost)',
+    description: 'Cari runbook — returns compact index (ID + title + score + 1-line snippet). Gunakan memory_get({id:"..."}) untuk baca full content. DILARANG full_content:true.',
     inputSchema: {
         type: 'object',
         properties: {
@@ -114,11 +157,14 @@ export async function execute(params) {
         query: searchQuery,
         tags = [],
         required_tags: requiredTags = [],
-        limit = 20,
+        limit: rawLimit = 20,
         offset = 0,
-        full_content: fullContent = false,
+        full_content: rawFullContent = false,
         scope_id: scopeId = ''
     } = params;
+
+    const fullContent = false;
+    const limit = Math.min(rawLimit, 20);
 
     try {
         // v7.0: Get more results for reranking, then apply post-processing
@@ -132,15 +178,64 @@ export async function execute(params) {
             scopeId
         });
 
+        // v7.5: Run vector search in parallel (async) — additive, not replacing FTS5
+        let vectorResults = [];
+        let vectorUsed = false;
+        if (isVectorReady()) {
+            try {
+                vectorResults = await vectorSearchRunbooks(searchQuery, fetchLimit);
+                vectorUsed = vectorResults.length > 0;
+            } catch (err) {
+                logger.warn('Vector search failed in memory_search (non-fatal)', { error: err.message });
+            }
+        }
+
+        // v7.5: RRF merge if vector results available, else use FTS5 only
+        let mergedResults;
+        if (vectorUsed && vectorResults.length > 0) {
+            mergedResults = rrfMerge(rawResults, vectorResults);
+        } else {
+            mergedResults = rawResults;
+        }
+
         // v7.0: Apply reranking with target-tag boost
-        const reranked = rerankResults(rawResults, searchQuery);
+        const reranked = rerankResults(mergedResults, searchQuery);
+
+        // v7.5: Graph enrichment — add related entities to results
+        for (const item of reranked) {
+            try {
+                const related = findRelatedEntities(item.id, 5);
+                if (related.length > 0) {
+                    item.related_entities = related.map(r => r.name).slice(0, 5);
+                }
+            } catch {}
+        }
 
         // Apply pagination AFTER reranking
         const paginated = reranked.slice(offset, offset + limit);
         const total = reranked.length;
 
+        const compactResults = paginated.map(item => {
+            const compact = {
+                id: item.id,
+                score: item.score,
+                vector_similarity: item.vector_similarity,
+                rrf_score: item.rrf_score
+            };
+            if (item.title) compact.title = item.title;
+            if (item.content_length) compact.content_length = item.content_length;
+            if (item.tags) compact.tags = item.tags;
+            if (item.created_at) compact.created_at = item.created_at;
+            if (item.updated_at) compact.updated_at = item.updated_at;
+            if (item.version) compact.version = item.version;
+            if (item.snippet) {
+                compact.snippet = item.snippet.length > 500 ? item.snippet.substring(0, 500) + '...' : item.snippet;
+            }
+            return compact;
+        });
+
         return {
-            results: paginated,
+            results: compactResults,
             pagination: {
                 total: rawPagination.total,
                 offset,
@@ -153,7 +248,9 @@ export async function execute(params) {
                 count: paginated.length,
                 storage: 'filesystem',
                 reranked: true,
-                query_expanded: true
+                query_expanded: true,
+                vector_used: vectorUsed,
+                vector_results: vectorResults.length
             }
         };
 

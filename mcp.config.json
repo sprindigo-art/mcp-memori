@@ -1,7 +1,7 @@
 {
     "name": "mcp-memori",
-    "version": "7.0.0",
-    "description": "MCP Memory Server v7.0 — File-based .md Runbooks + Intelligence Layer (query expansion, reranking, fuzzy match, LRU cache, universal error/technique tracking)",
+    "version": "7.6.0",
+    "description": "MCP Memory Server v7.6 — File-based .md Runbooks + Hook Auto-Capture + Intelligence Layer (v7.5 base + PostToolUse/SessionStart/Stop/PreCompact hooks, memory_autolog, privacy scrubber)",
     "transport": {
         "type": "stdio"
     },
@@ -33,6 +33,10 @@
         {
             "name": "memory_list",
             "description": "Browse semua runbook dengan filter tags, title, pagination"
+        },
+        {
+            "name": "memory_autolog",
+            "description": "Internal tool — hook-driven auto-capture ke section ## _AUTO_LOG. Bypass hard-block HANYA untuk section _AUTO_LOG (append-only log, bukan state). Section state (CREDENTIAL/EXPLOIT/LIVE STATUS) tetap via memory_upsert dengan hard-block. AI manual pakai memory_upsert, bukan ini."
         }
     ]
 }

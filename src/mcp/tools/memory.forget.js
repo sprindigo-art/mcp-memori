@@ -3,7 +3,7 @@
  * Menolak penghapusan jika belum membaca full content via memory_get
  * @module mcp/tools/memory.forget
  */
-import { deleteRunbook, RUNBOOKS_DIR, parseFrontmatter, buildFrontmatter } from '../../storage/files.js';
+import { deleteRunbook, RUNBOOKS_DIR, parseFrontmatter, buildFrontmatter, atomicWriteFileSync, findSectionEnd, isMajorSection } from '../../storage/files.js';
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { v4 as uuidv4 } from 'uuid';
@@ -24,6 +24,13 @@ const readConfirmations = new Map();
 export function confirmRead(id, mode = 'full', charsRead = 0) {
     const existing = readConfirmations.get(id);
     const now = Date.now();
+
+    if (readConfirmations.size > 100) {
+        const tenMinutes = 10 * 60 * 1000;
+        for (const [key, val] of readConfirmations) {
+            if ((now - val.timestamp) >= tenMinutes) readConfirmations.delete(key);
+        }
+    }
 
     if (existing && existing.mode === 'full') {
         // Already fully read — just update timestamp
@@ -63,11 +70,11 @@ export function hasBeenRead(id) {
     // sections_list ALONE = NOT enough (hanya lihat heading)
     if (entry.mode === 'sections_list' && (!entry.sectionsRead || entry.sectionsRead < 1)) return false;
 
-    // section read with content = OK (sudah baca real content)
-    if (entry.mode === 'section' && entry.charsRead > 100) return true;
+    // section read with SUBSTANTIAL content = OK (was 100, too low — baca 1 section kecil = unlock semua)
+    if (entry.mode === 'section' && entry.charsRead > 500) return true;
 
-    // sections_list + at least 1 section content = OK
-    if (entry.sectionsRead >= 1 && entry.charsRead > 100) return true;
+    // sections_list + at least 2 section content reads with substantial chars = OK
+    if (entry.sectionsRead >= 2 && entry.charsRead > 500) return true;
 
     return false;
 }
@@ -139,15 +146,17 @@ export async function execute(params) {
 
             if (removeSection) {
                 const sectionHeader = removeSection.startsWith('##') ? removeSection : `## ${removeSection}`;
-                const sectionRegex = new RegExp(
-                    `${sectionHeader.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s\\S]*?(?=\\n## |$)`, 'i'
-                );
-                const match = newBody.match(sectionRegex);
-                if (!match) {
+                const escapedHeader = sectionHeader.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const headerRegex = new RegExp(`^${escapedHeader}`, 'im');
+                const headerMatch = headerRegex.exec(newBody);
+                if (!headerMatch) {
                     return { ok: false, message: `Section "${removeSection}" tidak ditemukan.`, meta: { trace_id: traceId } };
                 }
-                newBody = newBody.replace(sectionRegex, '');
-                removedChars += match[0].length;
+                const sectionStart = headerMatch.index;
+                const sectionEnd = findSectionEnd(newBody, sectionStart);
+                const removedText = newBody.substring(sectionStart, sectionEnd);
+                newBody = newBody.substring(0, sectionStart) + newBody.substring(sectionEnd);
+                removedChars += removedText.length;
             }
 
             newBody = newBody.replace(/\n{3,}/g, '\n\n').trim();
@@ -155,7 +164,7 @@ export async function execute(params) {
             meta.version = (meta.version || 1) + 1;
             meta.last_edit = `Partial delete: ${reason}`;
 
-            writeFileSync(filepath, buildFrontmatter(meta) + newBody + '\n', 'utf8');
+            atomicWriteFileSync(filepath, buildFrontmatter(meta) + newBody + '\n', 'utf8');
             invalidateGetCache(id);
             try { updateIndexEntry(id); } catch {}
             logger.info('PARTIAL DELETE after read confirmation', { id, removed_chars: removedChars, reason });

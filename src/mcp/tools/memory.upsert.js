@@ -5,16 +5,47 @@
  * WAJIB memory_get dulu jika runbook SUDAH ADA — agar tahu isinya sebelum append
  * @module mcp/tools/memory.upsert
  */
-import { saveRunbook, titleToFilename, findByTitle, RUNBOOKS_DIR, parseFrontmatter, buildFrontmatter, filterNoiseTags } from '../../storage/files.js';
+import { saveRunbook, titleToFilename, findByTitle, findByFuzzyTitle, RUNBOOKS_DIR, parseFrontmatter, buildFrontmatter, filterNoiseTags, appendToSection, findSectionEnd, isMajorSection, atomicWriteFileSync } from '../../storage/files.js';
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { join, basename } from 'path';
 import { v4 as uuidv4 } from 'uuid';
+import { createHash } from 'crypto';
 import { hasBeenRead, getReadStatus } from './memory.forget.js';
 import { invalidateGetCache } from './memory.get.js';
 import { updateIndexEntry } from '../../storage/searchIndex.js';
+import { updateVectorEntry } from '../../storage/vectorIndex.js';
+import { updateGraphEntry } from '../../storage/graphIndex.js';
 import logger from '../../utils/logger.js';
 
 const AUTO_MEMORY_PATH = '/home/kali/.claude/projects/-home-kali-Desktop/memory/MEMORY.md';
+
+const contentDedupMap = new Map();
+
+function isContentHashDuplicate(sectionName, content) {
+    const now = Date.now();
+    if (contentDedupMap.size > 500) {
+        for (const [k, v] of contentDedupMap) {
+            if ((now - v) > 120000) contentDedupMap.delete(k);
+        }
+    }
+    const trimmed = (content || '').trim().substring(0, 150);
+    const hashInput = (sectionName || '') + '::' + trimmed;
+    const hash = createHash('sha256').update(hashInput, 'utf8').digest('hex');
+    const existing = contentDedupMap.get(hash);
+    if (existing && (now - existing) < 120000) return true;
+    contentDedupMap.set(hash, now);
+    return false;
+}
+
+/**
+ * v7.5: Update all index layers (FTS5 + vector + graph) for a filename
+ * Replaces individual try/catch blocks throughout the file
+ */
+function updateAllIndexes(filename) {
+    try { updateIndexEntry(filename); } catch {}
+    updateVectorEntry(filename).catch(() => {});
+    try { updateGraphEntry(filename); } catch {}
+}
 
 /**
  * Auto-update MEMORY.md "TARGET AKTIF TERAKHIR" saat upsert ke RUNBOOK target
@@ -66,7 +97,9 @@ export const definition = {
                         confidence: { type: 'number' },
                         success: { type: 'boolean', description: 'Whether the action succeeded' },
                         replace_section: { type: 'string', description: 'Replace existing ## section with new content instead of append. Section name without ## prefix (e.g. "CREDENTIAL", "RE-ENTRY CHECKLIST"). If section not found, appends instead.' },
-                        replace_text: { type: 'string', description: 'Find this exact text in the runbook and replace it with content. Like Edit tool — surgical edit without replacing entire section. Text must be unique in the file.' }
+                        replace_text: { type: 'string', description: 'Find this exact text in the runbook and replace it with content. Like Edit tool — surgical edit without replacing entire section. Text must be unique in the file.' },
+                        append_to_section: { type: 'string', description: 'Append content to END of specific ## section (preserving ALL existing content in that section). Section name without ## prefix (e.g. "CREDENTIAL", "GAGAL", "EXPLOIT"). If section not found, creates it. RECOMMENDED over replace_section for adding entries.' },
+                        auto_dual_save: { type: 'boolean', description: 'If true, auto-save failures to Kesalahan Universal + successes to Teknik Berhasil Universal. Default: false. Only set true when you want cross-target learning.' }
                     },
                     required: ['title', 'content']
                 },
@@ -314,6 +347,7 @@ export async function execute(params) {
     }
 
     const results = [];
+    const contradictions = []; // Collect contradiction warnings from appendToSection
 
     for (const item of items) {
         try {
@@ -332,13 +366,25 @@ export async function execute(params) {
             let actualFilename = filename;
             let fileExists = existsSync(filepath);
 
-            // Fallback: cari by frontmatter title (title beda sanitization → filename beda)
+            // Fallback 1: cari by frontmatter title (title beda sanitization → filename beda)
             if (!fileExists) {
                 const matchedPath = findByTitle(title);
                 if (matchedPath) {
                     filepath = matchedPath;
                     actualFilename = basename(matchedPath);
                     fileExists = true;
+                }
+            }
+
+            // Fallback 2: FUZZY title match — "[RUNBOOK] unitomo" → match "RUNBOOK_unitomo.ac.id.md"
+            // Prevents creating duplicate runbooks for the same target
+            if (!fileExists) {
+                const fuzzyPath = findByFuzzyTitle(title);
+                if (fuzzyPath) {
+                    filepath = fuzzyPath;
+                    actualFilename = basename(fuzzyPath);
+                    fileExists = true;
+                    logger.info('UPSERT FUZZY MATCH: Found similar runbook', { title, matched: actualFilename });
                 }
             }
 
@@ -359,6 +405,75 @@ export async function execute(params) {
                         + `Baru boleh upsert setelah benar-benar PAHAM isi runbook.`
                 });
                 continue;
+            }
+
+            // === APPEND TO SECTION MODE: Tambah content ke END of section yang benar ===
+            // PRESERVES semua content lama di section. Ideal untuk: credential, gagal, exploit, persistence
+            if (item.append_to_section && fileExists) {
+                try {
+                    if (isContentHashDuplicate(item.append_to_section, content)) {
+                        results.push({
+                            id: actualFilename, version: 0, status: 'active',
+                            action: 'skipped_content_hash_dedup', section: item.append_to_section, filepath
+                        });
+                        continue;
+                    }
+
+                    const raw = readFileSync(filepath, 'utf8');
+                    const { meta, body } = parseFrontmatter(raw);
+
+                    const { body: newBody, action: appendAction, contradiction } = appendToSection(body, item.append_to_section, content);
+
+                    // Collect contradiction warning for post-loop reminders
+                    if (contradiction) {
+                        contradictions.push(`⚠️ CONTRADICTION in ## ${item.append_to_section} of ${actualFilename}: ${contradiction}`);
+                    }
+
+                    if (appendAction === 'skipped_duplicate' || appendAction === 'skipped_near_duplicate') {
+                        results.push({
+                            id: actualFilename, version: meta.version || 1, status: 'active',
+                            action: appendAction, section: item.append_to_section, filepath
+                        });
+                        if (appendAction === 'skipped_near_duplicate') {
+                            contradictions.push(`ℹ️ NEAR-DUPLICATE BLOCKED: >80% baris content sudah ada di ## ${item.append_to_section} — skip untuk cegah duplikasi.`);
+                        }
+                        continue;
+                    }
+
+                    // Merge tags
+                    const oldTags = Array.isArray(meta.tags) ? meta.tags : [];
+                    meta.tags = filterNoiseTags([...new Set([...oldTags, ...tags.map(t => t.toLowerCase())])]);
+                    meta.updated = new Date().toISOString();
+                    meta.version = (meta.version || 1) + 1;
+                    if (options.success !== undefined) meta.success = options.success;
+
+                    atomicWriteFileSync(filepath, buildFrontmatter(meta) + newBody.trim() + '\n', 'utf8');
+                    invalidateGetCache(actualFilename);
+                    updateAllIndexes(actualFilename);
+                    updateActiveTarget(title, actualFilename);
+
+                    logger.info('SECTION APPEND', {
+                        filename: actualFilename, section: item.append_to_section,
+                        action: appendAction, added_chars: content.length
+                    });
+
+                    // v7.5 Aturan 20: Post-write verification — read back section size
+                    let verifiedChars = 0;
+                    try {
+                        const verifyRaw = readFileSync(filepath, 'utf8');
+                        const { body: verifyBody } = parseFrontmatter(verifyRaw);
+                        verifiedChars = verifyBody.length;
+                    } catch {}
+
+                    results.push({
+                        id: actualFilename, version: meta.version, status: 'active',
+                        action: appendAction, section: item.append_to_section, filepath,
+                        verified_total_chars: verifiedChars
+                    });
+                    continue;
+                } catch (appendErr) {
+                    logger.error('Append to section error', { error: appendErr.message, filename: actualFilename });
+                }
             }
 
             // === REPLACE TEXT MODE: Edit spesifik — cari teks lama, ganti dengan teks baru ===
@@ -415,10 +530,10 @@ export async function execute(params) {
                     meta.updated = new Date().toISOString();
                     meta.version = (meta.version || 1) + 1;
 
-                    writeFileSync(filepath, buildFrontmatter(meta) + finalBody.trim() + '\n', 'utf8');
+                    atomicWriteFileSync(filepath, buildFrontmatter(meta) + finalBody.trim() + '\n', 'utf8');
 
                     invalidateGetCache(actualFilename);
-                    try { updateIndexEntry(actualFilename); } catch {}
+                    updateAllIndexes(actualFilename);
                     updateActiveTarget(title, actualFilename);
 
                     logger.info('TEXT REPLACED', { filename: actualFilename, old_len: oldText.length, new_len: newText.length });
@@ -439,25 +554,47 @@ export async function execute(params) {
             }
 
             // === REPLACE SECTION MODE: Ganti section yang sudah tidak valid ===
+            // v7.4 FIX: Use findSectionEnd (respects isMajorSection) instead of regex
+            // Old regex [\s\S]*?(?=\n## |$) stopped at ANY ## including sub-headings → truncated sections
             if (item.replace_section && fileExists) {
+                // v7.6: Restrict replace_section to LIVE STATUS / RE-ENTRY only (workflow rule enforcement)
+                const allowedReplaceSections = ['live status', 're-entry checklist', 're-entry', '_changelog'];
+                const replaceSectionLower = item.replace_section.toLowerCase().replace(/^##\s*/, '');
+                if (!allowedReplaceSections.includes(replaceSectionLower)) {
+                    contradictions.push(`⚠️ REPLACE_SECTION BLOCKED: Section "${item.replace_section}" tidak boleh di-replace total. Gunakan append_to_section untuk tambah data, atau replace_text untuk edit surgical. replace_section HANYA untuk: LIVE STATUS, RE-ENTRY CHECKLIST.`);
+                    results.push({
+                        id: actualFilename,
+                        version: 0,
+                        status: 'blocked',
+                        action: 'replace_section_restricted',
+                        section: item.replace_section,
+                        allowed_sections: ['LIVE STATUS', 'RE-ENTRY CHECKLIST'],
+                        filepath
+                    });
+                    continue;
+                }
                 try {
                     const raw = readFileSync(filepath, 'utf8');
                     const { meta, body } = parseFrontmatter(raw);
                     const sectionHeader = item.replace_section.startsWith('##') ? item.replace_section : `## ${item.replace_section}`;
-                    const sectionRegex = new RegExp(
-                        `${sectionHeader.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s\\S]*?(?=\\n## |$)`, 'i'
-                    );
-                    const match = body.match(sectionRegex);
+                    const escapedHeader = sectionHeader.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                    const headerRegex = new RegExp(`^${escapedHeader}`, 'im');
+                    const headerMatch = headerRegex.exec(body);
 
                     let newBody;
-                    if (match) {
-                        // Replace existing section
-                        newBody = body.replace(sectionRegex, `${sectionHeader}\n${content}\n\n`);
-                        logger.info('SECTION REPLACED', { filename: actualFilename, section: item.replace_section, old_size: match[0].length, new_size: content.length });
+                    if (headerMatch) {
+                        // Found section — use proper boundary detection
+                        const sectionStart = headerMatch.index;
+                        const sectionEnd = findSectionEnd(body, sectionStart);
+                        const oldSection = body.substring(sectionStart, sectionEnd);
+
+                        // Replace: keep everything before + new section + everything after
+                        newBody = body.substring(0, sectionStart) + `${sectionHeader}\n${content}\n\n` + body.substring(sectionEnd);
+                        logger.info('SECTION REPLACED', { filename: actualFilename, section: item.replace_section, old_size: oldSection.length, new_size: content.length });
 
                         // Auto-append changelog entry (APPEND-ONLY — never replaced)
                         const now = new Date().toISOString().split('T')[0];
-                        const changelogEntry = `- ${now} v${(meta.version || 1) + 1}: replaced ## ${item.replace_section} (${match[0].length} → ${content.length} chars)`;
+                        const changelogEntry = `- ${now} v${(meta.version || 1) + 1}: replaced ## ${item.replace_section} (${oldSection.length} → ${content.length} chars)`;
                         const changelogHeader = '## _CHANGELOG';
                         if (newBody.includes(changelogHeader)) {
                             newBody = newBody.replace(changelogHeader, `${changelogHeader}\n${changelogEntry}`);
@@ -476,11 +613,11 @@ export async function execute(params) {
                     meta.updated = new Date().toISOString();
                     meta.version = (meta.version || 1) + 1;
 
-                    writeFileSync(filepath, buildFrontmatter(meta) + newBody.trim() + '\n', 'utf8');
+                    atomicWriteFileSync(filepath, buildFrontmatter(meta) + newBody.trim() + '\n', 'utf8');
 
                     // v7.0: Invalidate cache + update index after replace_section
                     invalidateGetCache(actualFilename);
-                    try { updateIndexEntry(actualFilename); } catch {}
+                    updateAllIndexes(actualFilename);
 
                     // Auto-update MEMORY.md active target
                     updateActiveTarget(title, actualFilename);
@@ -489,7 +626,7 @@ export async function execute(params) {
                         id: actualFilename,
                         version: meta.version,
                         status: 'active',
-                        action: match ? 'section_replaced' : 'section_appended',
+                        action: headerMatch ? 'section_replaced' : 'section_appended',
                         section: item.replace_section,
                         filepath
                     });
@@ -503,13 +640,13 @@ export async function execute(params) {
             const result = saveRunbook(title, content, tags, options);
 
             // v7.0: Invalidate LRU cache + update FTS5 index
-            if (result.action !== 'skipped_duplicate' && result.action !== 'skipped_empty') {
+            if (result.action !== 'skipped_duplicate' && result.action !== 'skipped_near_duplicate' && result.action !== 'skipped_empty') {
                 invalidateGetCache(result.id);
-                try { updateIndexEntry(result.id); } catch {}
+                updateAllIndexes(result.id);
             }
 
             // Auto-update MEMORY.md active target
-            if (result.action !== 'skipped_duplicate' && result.action !== 'skipped_empty') {
+            if (result.action !== 'skipped_duplicate' && result.action !== 'skipped_near_duplicate' && result.action !== 'skipped_empty') {
                 updateActiveTarget(title, result.id);
             }
 
@@ -534,20 +671,39 @@ export async function execute(params) {
         }
     }
 
-    // === POST-UPSERT INTELLIGENCE (v7.0) ===
-    const reminders = [];
+    // === POST-UPSERT INTELLIGENCE v7.4 ===
+    // v7.4 FIX: Auto-save ke runbook LAIN DIMATIKAN by default.
+    // ALASAN: Setiap upsert ke 1 runbook → 2-3 runbook lain ikut dimodifikasi
+    // Dual-save sekarang HARUS eksplisit: auto_dual_save: true
+    // v7.4 FIX #2: SKIP items yang BLOCKED — jangan run post-upsert pada item yang gagal save
+    const reminders = [...contradictions]; // Include contradiction warnings from appendToSection
+    const blockedIds = new Set(results.filter(r => r.status === 'blocked' || r.action === 'rejected').map(r => r.id));
 
     for (const item of items) {
         const title = (item.title || '').toLowerCase();
+        const itemFilename = titleToFilename(item.title || '');
 
-        // v7.0: AUTO-SAVE universal errors (cross-target learning)
-        autoSaveUniversalError(item, results);
+        // v7.4: SKIP blocked items — post-upsert hanya untuk item yang BERHASIL disimpan
+        if (blockedIds.has(itemFilename)) continue;
 
-        // v7.1: Auto dual-save technique to [TEKNIK] runbook (not just reminder)
-        const dualSaveResult = autoSaveTechnique(item);
-        if (dualSaveResult) reminders.push(dualSaveResult);
+        // v7.4: Auto-save HANYA jika eksplisit diminta
+        if (item.auto_dual_save === true) {
+            autoSaveUniversalError(item, results);
+            const dualSaveResult = autoSaveTechnique(item);
+            if (dualSaveResult) reminders.push(dualSaveResult);
+        }
 
-        // v7.0: Check auto-invalidation (PATCHED/DEAD/VERSION detection)
+        // v7.5 Aturan 3: Suggest dual-save ketika content punya signal sukses/gagal tapi auto_dual_save off
+        if (item.auto_dual_save !== true && title.startsWith('[runbook]')) {
+            const c = (item.content || '').toLowerCase();
+            const hasSuccess = /(?:berhasil|success|rce confirmed|shell obtained|root obtained)/i.test(c);
+            const hasFailure = /(?:gagal|failed|blocked|patched|tidak berhasil)/i.test(c);
+            if (hasSuccess || hasFailure) {
+                reminders.push(`💡 DUAL-SAVE: Content mengandung ${hasSuccess ? 'KEBERHASILAN' : 'KEGAGALAN'}. Pertimbangkan auto_dual_save:true agar tersimpan juga di runbook universal.`);
+            }
+        }
+
+        // v7.0: Check auto-invalidation (REMINDERS ONLY — tidak modifikasi file lain)
         const invalidationReminders = checkAutoInvalidation(item);
         reminders.push(...invalidationReminders);
 
@@ -561,6 +717,19 @@ export async function execute(params) {
         // REMINDER: Credential baru → harus update RE-ENTRY CHECKLIST
         if (/(?:password|credential|ssh|webshell|tunnel|token|key|login)/i.test(item.content || '') && title.startsWith('[runbook]')) {
             reminders.push('⚠️ CREDENTIAL: Pastikan update section ## RE-ENTRY CHECKLIST dan ## LIVE STATUS dengan status ALIVE/DEAD terkini.');
+        }
+
+        // v7.5 Aturan 16: Warn jika content menyebut target berbeda dari runbook title
+        if (title.startsWith('[runbook]')) {
+            const runbookTarget = (item.title || '').replace(/^\[RUNBOOK\]\s*/i, '').trim().toLowerCase().split('.')[0];
+            const contentLower = (item.content || '').toLowerCase();
+            const otherTargetMatch = contentLower.match(/\[runbook\]\s*([a-z0-9.-]+)/i);
+            if (otherTargetMatch) {
+                const mentionedTarget = otherTargetMatch[1].split('.')[0];
+                if (mentionedTarget !== runbookTarget && mentionedTarget.length >= 4) {
+                    reminders.push(`⚠️ MISPLACED? Content menyebut "[RUNBOOK] ${otherTargetMatch[1]}" tapi disimpan di runbook "${runbookTarget}". Pastikan lokasi benar.`);
+                }
+            }
         }
     }
 
