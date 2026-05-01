@@ -32,22 +32,19 @@ function findRunbookPath(target) {
     if (existsSync(filepath)) return filepath;
     const byTitle = findByTitle(title);
     if (byTitle) return byTitle;
-    const fuzzy = findByFuzzyTitle(title);
-    if (fuzzy) return fuzzy;
-    return null;
+    return findByFuzzyTitle(title);
 }
 
 function extractSection(body, header) {
-    const idx = body.indexOf(header);
-    if (idx === -1) return { content: '', start: -1, end: -1 };
+    const regex = new RegExp(`^${header.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'im');
+    const match = regex.exec(body);
+    if (!match) return { content: '', start: -1, end: -1 };
+    const idx = match.index;
+    if (idx > 0 && body[idx - 1] !== '\n') return { content: '', start: -1, end: -1 };
     const end = findSectionEnd(body, idx);
     return { content: body.substring(idx, end), start: idx, end };
 }
 
-/**
- * Parse _AUTO_LOG entries into structured records.
- * Entry format: "- [YYYY-MM-DD HH:MM:SS] [event_type/tool_name] payload"
- */
 function parseAutologEntries(autologContent, sinceMs) {
     const lines = autologContent.split('\n');
     const entries = [];
@@ -56,11 +53,88 @@ function parseAutologEntries(autologContent, sinceMs) {
         const m = line.match(lineRe);
         if (!m) continue;
         const ts = Date.parse(m[1] + 'Z');
-        if (isNaN(ts)) continue;
-        if (ts < sinceMs) continue;
+        if (isNaN(ts) || ts < sinceMs) continue;
         entries.push({ ts, event_type: m[2], tool_name: m[3], payload: m[4] });
     }
     return entries;
+}
+
+/**
+ * v8.0: Template-based session summary — NO AI, pure regex extraction.
+ * Extracts from _AUTO_LOG: commands, files, errors, tools, key findings.
+ * Appends to ## SESSION LOG as structured summary (like claude-mem but offline).
+ */
+function buildTemplateSummary(entries) {
+    const commands = new Map();
+    const files = new Set();
+    const errors = [];
+    const toolCounts = new Map();
+    const keyFindings = [];
+
+    for (const e of entries) {
+        const tool = e.tool_name || 'unknown';
+        toolCounts.set(tool, (toolCounts.get(tool) || 0) + 1);
+
+        const p = e.payload || '';
+
+        if (tool === 'Bash' || tool === 'bash') {
+            const cmdMatch = p.match(/^cmd:\s*(.+?)(?:\s*\||\s*$)/);
+            if (cmdMatch) {
+                const cmd = cmdMatch[1].substring(0, 120);
+                commands.set(cmd, (commands.get(cmd) || 0) + 1);
+            }
+        }
+
+        if (/file:|path:/i.test(p)) {
+            const fileMatch = p.match(/(?:file|path):\s*([^\s|,]+)/i);
+            if (fileMatch) files.add(fileMatch[1].substring(0, 100));
+        }
+
+        if (/ERROR|FAIL|DENIED|BLOCKED|TIMEOUT|refused|denied/i.test(p)) {
+            errors.push(p.substring(0, 150));
+        }
+
+        if (/credential|password|root|shell|webshell|reverse|exploit|berhasil|success|rce|access gained/i.test(p)) {
+            keyFindings.push(`[${e.tool_name}] ${p.substring(0, 120)}`);
+        }
+    }
+
+    const lines = [];
+    const now = new Date().toISOString().substring(0, 19).replace('T', ' ');
+    lines.push(`### Session ${now} (${entries.length} actions)`);
+
+    if (toolCounts.size > 0) {
+        const sorted = [...toolCounts.entries()].sort((a, b) => b[1] - a[1]);
+        lines.push(`**Tools:** ${sorted.map(([t, c]) => `${t}(${c})`).join(', ')}`);
+    }
+
+    if (commands.size > 0) {
+        lines.push(`**Commands (top 10):**`);
+        const topCmds = [...commands.entries()].sort((a, b) => b[1] - a[1]).slice(0, 10);
+        for (const [cmd, count] of topCmds) {
+            lines.push(`- \`${cmd}\`${count > 1 ? ` (×${count})` : ''}`);
+        }
+    }
+
+    if (files.size > 0) {
+        lines.push(`**Files (${files.size}):** ${[...files].slice(0, 10).join(', ')}${files.size > 10 ? ` +${files.size - 10} more` : ''}`);
+    }
+
+    if (errors.length > 0) {
+        lines.push(`**Errors (${errors.length}):**`);
+        for (const err of errors.slice(0, 5)) {
+            lines.push(`- ${err}`);
+        }
+    }
+
+    if (keyFindings.length > 0) {
+        lines.push(`**Key findings:**`);
+        for (const f of keyFindings.slice(0, 5)) {
+            lines.push(`- ${f}`);
+        }
+    }
+
+    return lines.join('\n');
 }
 
 async function main() {
@@ -74,52 +148,77 @@ async function main() {
 
     const filepath = findRunbookPath(target);
     if (!filepath) {
-        hookLog('INFO', 'Stop: no runbook for target, skip', { target });
+        hookLog('INFO', 'Stop: no runbook file for target', { target });
         process.exit(0);
     }
 
     try {
         const raw = readFileSync(filepath, 'utf8');
-        const { body } = parseFrontmatter(raw);
-
+        const { meta, body } = parseFrontmatter(raw);
         const autolog = extractSection(body, '## _AUTO_LOG');
+
         if (!autolog.content) {
-            hookLog('INFO', 'Stop: no _AUTO_LOG, skip', { target });
+            hookLog('INFO', 'Stop: no _AUTO_LOG section', { target });
             process.exit(0);
         }
 
         const sinceMs = Date.now() - LOOKBACK_HOURS * 60 * 60 * 1000;
         const entries = parseAutologEntries(autolog.content, sinceMs);
-        if (entries.length < 5) {
-            hookLog('INFO', 'Stop: <5 entries, skip', { target, entries: entries.length });
+
+        if (entries.length < 3) {
+            hookLog('INFO', 'Stop: too few entries for summary', { target, entries: entries.length });
             process.exit(0);
         }
 
-        // NO TEMPLATE SUMMARY — only fire LLM worker for AI-compressed narrative
-        // Template summaries (tool counts, command lists) were noise that caused
-        // 91-duplicate SESSION LOG spam. LLM narrative is the useful part.
-        if (process.env.MCP_MEMORI_LLM_SUMMARY !== '0') {
-            try {
-                const __dirname = dirname(fileURLToPath(import.meta.url));
-                const workerPath = join(__dirname, 'hook_llm_summary_worker.js');
-                const child = spawn('node', [
-                    workerPath,
-                    '--target', target,
-                    '--filepath', filepath,
-                    '--since', String(sinceMs)
-                ], {
-                    detached: true,
-                    stdio: 'ignore',
-                    env: process.env
-                });
-                child.unref();
-                hookLog('INFO', 'Stop: LLM worker spawned', { target, entries: entries.length, pid: child.pid });
-            } catch (err) {
-                hookLog('WARN', 'Stop: LLM worker spawn failed', { error: err?.message });
+        // v8.0: Template-based summary (zero AI, zero network)
+        const summary = buildTemplateSummary(entries);
+        const sessionLogHeader = '## SESSION LOG';
+        let newBody;
+
+        if (body.includes(sessionLogHeader)) {
+            const slIdx = body.indexOf(sessionLogHeader);
+            const slEnd = findSectionEnd(body, slIdx);
+            const existingLog = body.substring(slIdx, slEnd);
+            newBody = body.substring(0, slIdx) + existingLog.trimEnd() + '\n\n' + summary + '\n\n' + body.substring(slEnd);
+        } else {
+            const autoLogIdx = body.indexOf('## _AUTO_LOG');
+            if (autoLogIdx > 0) {
+                newBody = body.substring(0, autoLogIdx).trimEnd() + '\n\n' + sessionLogHeader + '\n' + summary + '\n\n' + body.substring(autoLogIdx);
+            } else {
+                newBody = body.trimEnd() + '\n\n' + sessionLogHeader + '\n' + summary + '\n';
             }
         }
+
+        const { writeFileSync } = await import('fs');
+        const { buildFrontmatter } = await import('../../src/storage/files.js');
+        meta.updated = new Date().toISOString();
+        writeFileSync(filepath, buildFrontmatter(meta) + newBody.trim() + '\n', 'utf8');
+
+        hookLog('INFO', 'Stop: session summary written', { target, entries: entries.length, summary_len: summary.length });
     } catch (err) {
-        hookLog('ERROR', 'Stop exception', { error: err?.message });
+        hookLog('WARN', 'Stop: summary error', { error: err?.message });
+    }
+
+    // LLM summary (opt-in, disabled by default)
+    if (process.env.MCP_MEMORI_LLM_SUMMARY === '1') {
+        try {
+            const raw = readFileSync(filepath, 'utf8');
+            const { body } = parseFrontmatter(raw);
+            const autolog = extractSection(body, '## _AUTO_LOG');
+            if (autolog.content) {
+                const sinceMs = Date.now() - LOOKBACK_HOURS * 60 * 60 * 1000;
+                const entries = parseAutologEntries(autolog.content, sinceMs);
+                if (entries.length >= 10) {
+                    const __dirname = dirname(fileURLToPath(import.meta.url));
+                    const workerPath = join(__dirname, 'hook_llm_summary_worker.js');
+                    const child = spawn('node', [workerPath, '--target', target, '--filepath', filepath, '--since', String(sinceMs)], { detached: true, stdio: 'ignore', env: process.env });
+                    child.unref();
+                    hookLog('INFO', 'Stop: LLM worker spawned (opt-in)', { target, entries: entries.length, pid: child.pid });
+                }
+            }
+        } catch (err) {
+            hookLog('WARN', 'Stop: LLM error', { error: err?.message });
+        }
     }
 
     process.exit(0);

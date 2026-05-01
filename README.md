@@ -1,91 +1,111 @@
-# MCP Memory Server v7.5
+# MCP Memory Server v8.3
 
 Production-grade MCP Memory Server — **OTAK UTAMA** AI berbasis runbook `.md` files.
 
-**Status:** Production (Apr 10, 2026) | **Runbooks:** 210 | **Size:** 10.45 MB | **Entities:** 1,750 | **Links:** 2,698
-**Search:** FTS5 BM25 + Vector Semantic (all-MiniLM-L6-v2) + RRF Merge | **Graph:** Knowledge graph cross-runbook
+**Status:** Production (Apr 30, 2026) | **Runbooks:** 237+ | **Size:** 14.59 MB | **Entities:** 1,750+ | **Links:** 2,698+
+**Search:** FTS5 BM25 + Vector Semantic v2.0 (per-section, all-MiniLM-L6-v2) + RRF Merge + Domain-Aware Reranking
+**Hooks:** 5 lifecycle hooks (auto-capture, writeback counter, post-compaction recovery, session summary)
+**Benchmark:** Menang vs claude-mem plugin di 5/6 dimensi (search, get, save, compaction, storage)
 
 ---
 
-## Arsitektur v7.5
+## Arsitektur v8.3
 
 ```
-┌──────────────────────────────────────────────────────┐
-│              MCP Memory v7.5 — Runbook Engine         │
-├──────────┬──────────┬────────────────────────────────┤
-│  7 Tools │ 3 Index  │ Storage: .md files             │
-├──────────┴──────────┴────────────────────────────────┤
-│                                                      │
-│  ┌─────────────┐  ┌──────────────┐  ┌─────────────┐ │
-│  │   Search    │  │    Upsert    │  │     Get     │ │
-│  │ FTS5+Vector │  │ section-aware│  │  pagination │ │
-│  │ +RRF merge  │  │ +hard-block  │  │  +warnings  │ │
-│  │ +rerank     │  │ +fuzzy match │  │  +sections  │ │
-│  └──────┬──────┘  └──────┬───────┘  └──────┬──────┘ │
-│         │                │                 │        │
-│  ┌──────▼────────────────▼─────────────────▼──────┐ │
-│  │          Runbook Files (.md)                    │ │
-│  │  210 files | 10.45 MB | YAML frontmatter       │ │
-│  │  Sections: CREDENTIAL, EXPLOIT, GAGAL, etc.    │ │
-│  │  Atomic writes + .bak backup + file locking    │ │
-│  └────────────────────────────────────────────────┘ │
-│                                                      │
-│  ┌──────────┐  ┌──────────────┐  ┌────────────────┐ │
-│  │ FTS5 BM25│  │ Vector Index │  │ Knowledge Graph│ │
-│  │ search   │  │ MiniLM-L6-v2 │  │ 1,750 entities │ │
-│  │ _index.db│  │ 384-dim local│  │ 2,698 links    │ │
-│  └──────────┘  └──────────────┘  └────────────────┘ │
-│                                                      │
-│  ┌───────────────┐  ┌──────────┐  ┌──────────────┐  │
-│  │ Contradiction │  │ Provenance│  │    Cache     │  │
-│  │ 18 patterns   │  │ auto-date │  │  LRU 150    │  │
-│  │ +warnings     │  │ [YYYY-MM] │  │  3min TTL   │  │
-│  └───────────────┘  └──────────┘  └──────────────┘  │
-└──────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────┐
+│              MCP Memory v8.3 — Runbook Engine              │
+├──────────┬──────────┬─────────────────────────────────────┤
+│  9 Tools │ 3 Index  │ Storage: .md files + 5 Hooks        │
+├──────────┴──────────┴─────────────────────────────────────┤
+│                                                           │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐    │
+│  │   Search     │  │    Upsert    │  │     Get      │    │
+│  │ FTS5+Vector  │  │ section-aware│  │  pagination  │    │
+│  │ +RRF merge   │  │ +hard-block  │  │  +sections   │    │
+│  │ +domain-rank │  │ +fuzzy match │  │  +warnings   │    │
+│  │ +snippet-cred│  │ +3-layer dup │  │  +health     │    │
+│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘    │
+│         │                 │                  │            │
+│  ┌──────▼─────────────────▼──────────────────▼──────────┐ │
+│  │          Runbook Files (.md)                         │ │
+│  │  237+ files | 14.59 MB | YAML frontmatter           │ │
+│  │  Sections: CREDENTIAL, EXPLOIT, GAGAL, etc.         │ │
+│  │  Atomic writes + .bak backup + file locking         │ │
+│  └──────────────────────────────────────────────────────┘ │
+│                                                           │
+│  ┌──────────┐  ┌───────────────┐  ┌────────────────┐     │
+│  │ FTS5 BM25│  │ Vector v2.0   │  │ Knowledge Graph│     │
+│  │ noise-   │  │ per-SECTION   │  │ entities+links │     │
+│  │ filtered │  │ 384-dim local │  │ 2-hop reasoning│     │
+│  └──────────┘  └───────────────┘  └────────────────┘     │
+│                                                           │
+│  ┌──────────────────────────────────────────────────────┐ │
+│  │ HOOKS (5 lifecycle events)                           │ │
+│  │ SessionStart: inject target + RE-ENTRY + auto-log   │ │
+│  │ PostToolUse:  auto-capture + writeback counter       │ │
+│  │ UserPromptSubmit: auto-inject 2 relevant memories   │ │
+│  │ Stop:         template session summary              │ │
+│  │ PreCompact:   fsync flush + compaction marker       │ │
+│  └──────────────────────────────────────────────────────┘ │
+│                                                           │
+│  ┌───────────────┐  ┌──────────┐  ┌──────────────┐       │
+│  │ Contradiction │  │ Provenance│  │    Cache     │       │
+│  │ 16 patterns   │  │ auto-date │  │  LRU 150    │       │
+│  │ +reminders    │  │ [YYYY-MM] │  │  3min TTL   │       │
+│  └───────────────┘  └──────────┘  └──────────────┘       │
+└───────────────────────────────────────────────────────────┘
 ```
 
 ---
 
 ## Kemampuan Utama
 
-- **Runbook-based storage** — `.md` files dengan YAML frontmatter, section-aware operations
-- **Hybrid search** — FTS5 BM25 + vector semantic (all-MiniLM-L6-v2, 384-dim) + Reciprocal Rank Fusion
-- **Knowledge graph** — 1,750 entities (targets, services, CVEs, techniques) + 2,698 cross-runbook links
-- **Hard-block read-before-write** — WAJIB baca runbook sebelum boleh upsert (10 menit expiry)
-- **Section-aware ops** — `append_to_section`, `replace_section`, `replace_text` dengan boundary detection
-- **Anti-duplicate** — content dedup pada append, skips identical entries
-- **Contradiction detection** — 18 pattern pairs (alive/dead, patched/vulnerable, success/failed, dll)
-- **Fuzzy title matching** — domain-aware: `[RUNBOOK] unitomo` → match `unitomo.ac.id`, prevents duplicate files
-- **Atomic writes** — write to .tmp, rename (POSIX atomic) + .bak backup + file locking
-- **Auto-provenance** — setiap append otomatis di-stamp `[YYYY-MM-DD]`
-- **Health warnings** — stale (>30 hari), bloat (>200KB), mature (v>50), empty sections
-- **Dual-save** — `auto_dual_save: true` untuk auto-save ke kesalahan/teknik universal
-- **Post-write verify** — `verified_total_chars` di response setelah write
-- **Misplaced content warning** — warn jika content menyebut target berbeda dari runbook title
-- **LRU Cache** — response cepat untuk runbooks yang sering diakses (150 items, 3min TTL)
-- **Tanpa API key** — embedding lokal via @xenova/transformers
+### Storage & Safety
+- **Runbook-based** — `.md` files, YAML frontmatter, section-aware CRUD
+- **Hard-block** — WAJIB baca sebelum write (10 min expiry, >500 chars)
+- **Anti-duplicate 3-layer** — exact substring + 80% near-dup + SHA-256 120s window
+- **Contradiction detection** — 16 state pairs (alive/dead, patched/vuln, success/failed)
+- **Atomic writes** — .tmp + rename + .bak backup + file locking
+- **Section-lock** — `replace_section` hanya untuk LIVE STATUS/RE-ENTRY
+
+### Search v8.3
+- **Hybrid** — FTS5 BM25 + Vector v2.0 (per-section) + RRF merge
+- **Domain-aware ranking** — "pushidrosal.tnial" → variant parts, 60%+ match ratio = 2.5x boost
+- **Credential-priority snippet** — [CRED] nearby +8, password same-line +5, sshpass +5
+- **_AUTO_LOG noise filter** — strip dari FTS5 index, SSH warnings strip dari hooks
+- **Query expansion** — sinonim Indonesia + domain part variants
+- **Knowledge graph** — entities + links + 2-hop cross-runbook reasoning
+
+### Hooks v8.3 (5 lifecycle events)
+- **PostToolUse** — auto-capture ke _AUTO_LOG + observations + writeback counter (⚠️ >10 calls)
+- **SessionStart** — inject LIVE STATUS + RE-ENTRY + 10 auto-log + post-compaction warning
+- **UserPromptSubmit** — auto-inject 2 memori relevan (35+ keyword signals)
+- **Stop** — template session summary ke SESSION LOG
+- **PreCompact** — fsync + compaction marker
+
+### Other
+- **Fuzzy title matching** — domain-aware partial + Jaccard similarity
+- **Health warnings** — stale, bloat, mature, empty sections, misplaced content
+- **Dual-save** — `auto_dual_save: true` untuk cross-target learning
+- **LRU Cache** — 150 items, 3min TTL | **Tanpa API key** — embedding lokal
 
 ---
 
-## 7 Tools
+## 9 Tools
 
 ### 1. `memory_search`
-Cari runbook dengan hybrid search (FTS5 + vector + RRF merge + reranking + target-tag boost).
+Cari runbook dengan hybrid search (FTS5 + vector v2.0 + RRF merge + domain-aware reranking + credential-priority snippet).
 
 ```json
 {
-  "query": "postgresql credential exploit",
+  "query": "akses SSH pushidrosal.tnial credential",
   "project_id": "janda_workspace",
-  "tags": ["unitomo"],
-  "required_tags": ["credential"],
-  "limit": 20,
-  "offset": 0,
-  "full_content": false,
-  "scope_id": "RUNBOOK_unitomo.ac.id.md"
+  "tags": ["tnial"],
+  "limit": 20
 }
 ```
 
-**Response:** `results[]` dengan score, snippet, tags, related_entities | `meta.vector_used`, `meta.vector_results`
+**Response:** Plaintext list — title, score, ID, 300-char snippet (credential-priority). Snippet menampilkan password/command langsung, bukan section random.
 
 ### 2. `memory_get`
 Baca isi runbook lengkap. Support pagination, section filter, line-based read.
@@ -193,8 +213,21 @@ Statistik runbook: total, size, tags breakdown.
 Ringkasan project dari runbook files.
 
 ```json
+{ "project_id": "janda_workspace" }
+```
+
+### 8. `memory_autolog`
+Internal hook tool — auto-append tool call entries ke ## _AUTO_LOG. Bypass hard-block (journal only, bukan state).
+
+### 9. `memory_timeline`
+Konteks kronologis di sekitar event. DB-based (observations) atau runbook _AUTO_LOG based.
+
+```json
 {
-  "project_id": "janda_workspace"
+  "query": "curl verify_tables",
+  "runbook_id": "RUNBOOK_samb-melaka.com.md",
+  "depth_before": 5,
+  "depth_after": 5
 }
 ```
 
@@ -244,29 +277,41 @@ confidence: 0.95
 
 ---
 
-## Search Architecture
+## Search Architecture v8.3
 
-### 3-Layer Hybrid Search
+### 4-Layer Hybrid Search
 ```
-Query → ┌─ FTS5 BM25 (keyword match, porter stemming) ─┐
-        │                                                │→ RRF Merge → Rerank → Results
-        └─ Vector Similarity (cosine, MiniLM-L6-v2) ────┘
-                                                    ↓
-                                          Knowledge Graph enrichment
-                                          (related_entities per result)
+Query → ┌─ FTS5 BM25 (noise-filtered, _AUTO_LOG stripped) ──┐
+        │                                                     │→ RRF Merge → Domain Rerank → Snippet
+        └─ Vector v2.0 (per-SECTION, cosine, MiniLM-L6-v2) ─┘       ↓
+                                                           Knowledge Graph enrichment
+                                                           Domain variant expansion
+                                                           Credential-priority snippet
 ```
 
-### Knowledge Graph
-- **Entity types:** target, service, cve, technique, tag
-- **Relations:** targets, uses_service, exploits_cve, uses_technique, tagged
-- **Queries:** `queryGraph("postgresql")` → semua runbook yang pakai PostgreSQL
-- **2-hop:** `findRelatedEntities("unitomo")` → entities yang co-occur dengan unitomo
+### Search Fixes v8.3 (vs v7.5)
+| Fix | Masalah | Solusi |
+|-----|---------|-------|
+| _AUTO_LOG strip | tool call noise polusi FTS5 ranking | strip dari index |
+| Domain variant | "pushidrosal.tnial" hanya match exact | expand ALL parts |
+| Match ratio boost | 2 tag match = 1.6x (terlalu lemah) | 60%+ ratio = 2.5x |
+| Title non-common | "ssh"+"vcenter" over-boost generik | filter COMMON words |
+| Global proximity | exact domain return pertama (salah) | collect ALL, pick best |
+| Credential priority | snippet random section | [CRED]/password/sshpass bonus |
+| Short word skip | "pu" match "jdih**pu**" (palsu) | header bonus ≥3 chars only |
 
-### Scoring & Reranking
-- BM25 score normalization (dynamic max, bukan hardcoded)
-- Target-tag boost (20% per matching keyword, cap 50%)
-- Title target boost (15% per match)
-- Failure penalty (15% jika bukan query failure-specific)
+### Vector Index v2.0
+- **v1.0**: 1 vector per runbook (title + 450 chars) → 0.05% coverage file besar
+- **v2.0**: 1 vector per ## section (max 30/file, file >10KB) → section CREDENTIAL/EXPLOIT ter-embed
+- Table: `section_embeddings` (id, section_name, embedding)
+- Search: whole-doc + per-section, merge best similarity per runbook
+
+### Scoring & Reranking v8.3
+- Domain variant expansion: "pushidrosal.tnial" → [pushidrosal, tnial]
+- Match ratio boost: 60%+ variants match tags/ID = 2.5x boost
+- Title density: only non-COMMON words counted
+- Credential snippet: proximity search with [CRED] +8, password +5, sshpass +5
+- Failure penalty: 15% jika bukan query failure-specific
 - RRF merge constant k=60
 
 ---
@@ -324,19 +369,21 @@ mcp-memori/
 ├── src/
 │   ├── server.js                # MCP stdio server (JSON-RPC 2.0)
 │   ├── mcp/
-│   │   ├── index.js             # Tool registry (7 tools)
+│   │   ├── index.js             # Tool registry (9 tools)
 │   │   └── tools/
-│   │       ├── memory.search.js     # FTS5+Vector+RRF hybrid search
+│   │       ├── memory.search.js     # FTS5+Vector v2.0+RRF+domain-aware reranking
 │   │       ├── memory.get.js        # Pagination, sections, health warnings
 │   │       ├── memory.upsert.js     # Section-aware, hard-block, fuzzy match
 │   │       ├── memory.forget.js     # Partial/full delete, read-before-delete
 │   │       ├── memory.list.js       # Browse/filter/paginate
 │   │       ├── memory.stats.js      # Statistics
-│   │       └── memory.summarize.js  # Project summary
+│   │       ├── memory.summarize.js  # Project summary
+│   │       ├── memory.autolog.js    # Hook-driven auto-capture journal
+│   │       └── memory.timeline.js   # Chronological context viewer
 │   ├── storage/
 │   │   ├── files.js             # Core: runbook CRUD, sections, atomic writes
 │   │   ├── searchIndex.js       # FTS5 BM25 index (search_index.db)
-│   │   ├── vectorIndex.js       # Vector embeddings (MiniLM-L6-v2)
+│   │   ├── vectorIndex.js       # Vector v2.0 (per-section, MiniLM-L6-v2)
 │   │   └── graphIndex.js        # Knowledge graph (entities + relations)
 │   ├── retrieval/               # Legacy hybrid search (SQLite DB mode)
 │   ├── governance/              # Legacy guardrails & policy
@@ -346,7 +393,16 @@ mcp-memori/
 │       ├── embedding-local.js   # @xenova/transformers (384-dim)
 │       ├── logger.js            # Structured logging (stderr)
 │       └── ...
-├── runbooks/                    # 210 .md runbook files (PRIMARY STORAGE)
+│   │       ├── scrubber.js       # Password/token/JWT scrubber
+│   │       └── ...
+├── scripts/hooks/               # 5 lifecycle hooks
+│   ├── hook_auto_capture.js     # PostToolUse: _AUTO_LOG + writeback counter
+│   ├── hook_session_start.js    # SessionStart: target context injection
+│   ├── hook_session_stop.js     # Stop: template session summary
+│   ├── hook_user_prompt.js      # UserPromptSubmit: memory auto-inject
+│   ├── hook_pre_compact.js      # PreCompact: fsync flush
+│   └── hook_lib.js              # Shared helpers, SSH noise strip, MCP dev filter
+├── runbooks/                    # 237+ .md runbook files (PRIMARY STORAGE)
 ├── data/
 │   ├── memory.db                # Legacy SQLite (backup reference)
 │   └── search_index.db          # FTS5 + vector + graph indexes
@@ -355,27 +411,25 @@ mcp-memori/
 
 ---
 
-## Keunggulan vs MCP Memory Publik
+## Keunggulan vs Alternatif
 
-| Feature | MCP Memory v7.5 | Mem0 | OpenAI Memory | doobidoo/mcp-memory |
-|---------|-----------------|------|---------------|---------------------|
-| **Storage** | .md runbooks (human-readable) | Vector + Graph cloud | Blackbox | SQLite |
-| **Search** | FTS5 + Vector + RRF + rerank | Vector + Graph | Unknown | Vector only |
-| **Section-aware** | ✅ append/replace per section | ❌ Flat entries | ❌ | ❌ |
-| **Read-before-write** | ✅ Hard-block enforced | ❌ | ❌ | ❌ |
-| **Contradiction detection** | ✅ 18 patterns inline | ❌ Manual | ❌ | ❌ |
-| **Anti-duplicate** | ✅ Content dedup on append | ⚠️ Entity resolution | ❌ | ❌ |
-| **Fuzzy match** | ✅ Domain-aware + Jaccard | ⚠️ Entity matching | ❌ | ❌ |
-| **Atomic writes** | ✅ .tmp + rename + .bak + lock | ❌ | N/A | ❌ |
-| **Provenance** | ✅ Auto date stamp | ⚠️ Timestamp only | ❌ | ❌ |
-| **Health warnings** | ✅ Stale/bloat/mature/misplaced | ❌ | ❌ | ❌ |
-| **Knowledge graph** | ✅ 1,750 entities local | ✅ Cloud graph | ❌ | ❌ |
-| **Post-write verify** | ✅ verified_total_chars | ❌ | ❌ | ❌ |
-| **Dual-save** | ✅ auto_dual_save opt-in | ❌ | ❌ | ❌ |
-| **Embedding** | Local (no API key) | Requires API | Built-in | Requires API |
-| **Latency** | <20ms (cache hit) | 1.4s p95 | Unknown | Unknown |
+| Feature | MCP Memory v8.3 | claude-mem | Mem0 | doobidoo/mcp-memory |
+|---------|-----------------|------------|------|---------------------|
+| **Storage** | .md runbooks (human-readable) | SQLite DB only | Vector cloud | SQLite |
+| **Search** | FTS5 + Vector v2.0 + RRF + domain-rank | FTS5 (deprecated) + ChromaDB | Vector + Graph | Vector only |
+| **Snippet** | ✅ Credential-priority, 300 chars | ❌ Compact index only | ❌ | ❌ |
+| **Section CRUD** | ✅ append/replace/text per section | ❌ Whole observation | ❌ | ❌ |
+| **Hard-block** | ✅ Read-before-write enforced | ❌ | ❌ | ❌ |
+| **Anti-duplicate** | ✅ 3-layer (exact+near+SHA256) | ⚠️ SHA256 only | ⚠️ | ❌ |
+| **Contradiction** | ✅ 16 patterns + reminders | ❌ | ❌ | ❌ |
+| **Lifecycle hooks** | ✅ 5 hooks + writeback counter | ✅ 6 hooks | ❌ | ❌ |
+| **Post-compaction** | ✅ Auto-inject + warning | ✅ Context inject | ❌ | ❌ |
+| **Vector granularity** | ✅ Per-section (file >10KB) | ✅ Per-field | ❌ | ❌ |
+| **Knowledge graph** | ✅ Local, 2-hop reasoning | ❌ | ✅ Cloud | ❌ |
+| **Dependencies** | None (local CPU) | Bun + ChromaDB + uv | API key | API key |
+| **Latency** | <20ms (cache hit) | ~100ms (HTTP worker) | 1.4s p95 | Unknown |
 
-**Keunggulan utama:** Section-aware runbook memory yang MENCEGAH kesalahan (hard-block, contradiction, misplaced, anti-duplicate) — bukan hanya menyimpan.
+**Keunggulan utama:** Search menampilkan credential/SSH langsung di snippet, section-aware CRUD, hard-block safety, writeback counter enforcement — bukan hanya menyimpan tapi MENCEGAH kesalahan.
 
 ---
 
@@ -383,13 +437,11 @@ mcp-memori/
 
 | Version | Tanggal | Perubahan Utama |
 |---------|---------|----------------|
-| **v7.5** | **Apr 10, 2026** | **Vector search (MiniLM-L6-v2 + RRF), knowledge graph (1,750 entities), contradiction detection (18 pairs), fuzzy domain matching, atomic writes + file locking, auto-provenance stamp, stale/bloat/mature warnings, section health, misplaced content warning, dual-save suggestion, post-write verify, anti-regression** |
-| v7.0 | Apr 2026 | File-based storage (.md runbooks), FTS5 BM25 search index, section-aware upsert (append_to_section/replace_section), hard-block read-before-write, LRU cache, query expansion |
-| v6.0 | Mar 2026 | Migration from SQLite to filesystem, YAML frontmatter, section parsing |
-| v5.2 | Feb 21, 2026 | FTS standalone, history backup, prune protection, memory_list |
-| v5.0 | Feb 8, 2026 | LRU cache, memory_reflect, front-loading embedding |
-| v4.0 | Feb 7, 2026 | Archive, consolidate, temporal intelligence |
-| v2.0 | Dec 2025 | 5-layer architecture, knowledge graph, temporal decay |
+| **v8.3** | **Apr 30, 2026** | **9 search fixes (domain variant, match ratio boost, credential-priority snippet, _AUTO_LOG noise strip, short-word header skip), vector v2.0 per-section, 5 hook fixes (writeback counter, post-compaction warning, SSH strip, MCP dev filter, UserPromptSubmit expanded), CLAUDE.md workflow v8.3, memory_timeline tool, template session summary** |
+| v7.5 | Apr 10, 2026 | Vector search (MiniLM-L6-v2 + RRF), knowledge graph, contradiction detection (16 pairs), fuzzy domain matching, atomic writes + file locking, auto-provenance, health warnings, dual-save |
+| v7.0 | Apr 2026 | File-based storage (.md runbooks), FTS5 BM25, section-aware upsert, hard-block, LRU cache, query expansion |
+| v6.0 | Mar 2026 | Migration from SQLite to filesystem, YAML frontmatter |
+| v5.0 | Feb 2026 | LRU cache, front-loading embedding, memory_list |
 | v1.0 | Nov 2025 | Base: search, get, upsert, forget, summarize |
 
 ## License

@@ -723,7 +723,32 @@ const QUERY_SYNONYMS = {
 
     // Status
     'alive': ['active', 'working', 'running', 'connected'],
-    'dead': ['inactive', 'down', 'disconnected', 'patched']
+    'dead': ['inactive', 'down', 'disconnected', 'patched'],
+
+    // Indonesian action synonyms
+    'larikan': ['pindahkan', 'migrasi', 'migration', 'transfer', 'move'],
+    'pindahkan': ['larikan', 'migrasi', 'migration', 'transfer', 'move'],
+    'migrasi': ['migration', 'pindahkan', 'larikan', 'transfer'],
+    'migration': ['migrasi', 'pindahkan', 'transfer', 'move'],
+    'hidupkan': ['revival', 'restore', 'aktifkan', 'enable', 'up'],
+    'matikan': ['disable', 'stop', 'kill', 'shutdown'],
+    'larikan': ['pindahkan', 'migrasi', 'migration', 'transfer', 'move', 'revival', 'redirect'],
+    'pindah': ['migrasi', 'transfer', 'move', 'redirect', 'switch'],
+
+    // Hosting & DNS
+    'cpanel': ['hosting', 'whm', 'nameserver', 'dns', 'panel'],
+    'hosting': ['cpanel', 'whm', 'server', 'vps', 'shared'],
+    'nameserver': ['dns', 'bind', 'resolve', 'ns', 'record'],
+    'domain': ['dns', 'subdomain', 'record', 'nameserver', 'zone'],
+    'dns': ['nameserver', 'bind', 'record', 'resolve', 'zone'],
+    'record': ['dns', 'cname', 'mx', 'txt'],
+
+    // Infrastructure
+    'cloudflare': ['cdn', 'waf', 'proxy', 'dns', 'tunnel'],
+    'nginx': ['proxy', 'reverse', 'webserver', 'vhost'],
+    'apache': ['httpd', 'webserver', 'htaccess', 'vhost'],
+    'bind': ['dns', 'named', 'zone', 'nameserver', 'webmin'],
+    'webmin': ['bind', 'dns', 'panel', 'admin']
 };
 
 /**
@@ -745,7 +770,7 @@ function expandQueryWords(queryStr) {
     }
 
     let expansionsAdded = 0;
-    const MAX_EXPANSIONS = 4; // Reduced from 6 to reduce noise
+    const MAX_EXPANSIONS = originalWords.length > 5 ? 2 : 4;
 
     for (const [key, synonyms] of Object.entries(QUERY_SYNONYMS)) {
         if (expansionsAdded >= MAX_EXPANSIONS) break;
@@ -784,20 +809,62 @@ function extractContextSnippet(body, queryWords, maxLen = 1200) {
         return match ? match[1].trim() : null;
     }
 
-    // PRIORITY 1: Find exact multi-word phrase match first (e.g. "pujeyden.fokuswarta.id")
+    // PRIORITY 1: Find domain/long-word match — pick occurrence nearest to OTHER query words
     const fullQuery = queryWords.join(' ').toLowerCase();
-    const domainLike = queryWords.filter(w => w.includes('.') || w.length > 8);
+    const domainLike = queryWords.filter(w => w.includes('.') && w.length > 4);
+    const otherWords = (queryWords._originalWords || queryWords)
+        .map(w => w.toLowerCase())
+        .filter(w => !domainLike.some(d => d.toLowerCase() === w));
+    // v8.3: Search ALL domain terms (exact + parts), collect ALL candidates,
+    // pick the one with HIGHEST proximity to other query words globally.
+    // Prevents: exact match "pushidrosal.tnial" returning ANALISIS section
+    // when part match "pushidrosal" has much higher proximity in CREDENTIAL section.
+    const domainSearchTerms = [];
     for (const term of domainLike) {
-        const idx = bodyLower.indexOf(term.toLowerCase());
-        if (idx !== -1) {
-            const start = Math.max(0, idx - 200);
-            const raw = body.substring(start, start + maxLen).trim();
-            // v7.4: Find which section this belongs to
-            const beforeMatch = body.substring(0, idx);
-            const lastSectionHeader = beforeMatch.match(/## ([^\n]+)/g);
-            const sectionCtx = lastSectionHeader ? `[${lastSectionHeader[lastSectionHeader.length - 1].replace('## ', '')}] ` : '';
-            return sectionCtx + raw;
+        domainSearchTerms.push(term.toLowerCase());
+        for (const part of term.split('.')) {
+            if (part.length >= 4) domainSearchTerms.push(part.toLowerCase());
         }
+    }
+    const uniqueDomainTerms = [...new Set(domainSearchTerms)];
+    let globalBestIdx = -1;
+    let globalBestProximity = 0;
+    for (const termLower of uniqueDomainTerms) {
+        let searchPos = 0;
+        while (true) {
+            const idx = bodyLower.indexOf(termLower, searchPos);
+            if (idx === -1) break;
+            const window = bodyLower.substring(Math.max(0, idx - 300), idx + 500);
+            let proximity = 1;
+            for (const ow of otherWords) {
+                if (window.includes(ow)) proximity += 3;
+            }
+            const nearbyLines = bodyLower.substring(Math.max(0, idx - 500), idx + 500);
+            if (nearbyLines.includes('password')) proximity += 5;
+            if (nearbyLines.includes('email')) proximity += 3;
+            if (nearbyLines.includes('credential')) proximity += 3;
+            if (nearbyLines.includes('sshpass')) proximity += 5;
+            if (nearbyLines.includes('[cred]')) proximity += 8;
+            if (nearbyLines.includes('command:')) proximity += 3;
+            const lineStart = bodyLower.lastIndexOf('\n', idx) + 1;
+            const lineEnd = bodyLower.indexOf('\n', idx);
+            const sameLine = bodyLower.substring(lineStart, lineEnd > 0 ? lineEnd : idx + 300);
+            if (sameLine.includes('@') && sameLine.includes('|')) proximity += 10;
+            if (sameLine.includes('password') || sameLine.includes('p@ss')) proximity += 5;
+            if (proximity > globalBestProximity) {
+                globalBestProximity = proximity;
+                globalBestIdx = idx;
+            }
+            searchPos = idx + termLower.length;
+        }
+    }
+    if (globalBestIdx !== -1) {
+        const start = Math.max(0, globalBestIdx - 100);
+        const raw = body.substring(start, start + maxLen).trim();
+        const beforeMatch = body.substring(0, globalBestIdx);
+        const lastSectionHeader = beforeMatch.match(/## ([^\n]+)/g);
+        const sectionCtx = lastSectionHeader ? `[${lastSectionHeader[lastSectionHeader.length - 1].replace('## ', '')}] ` : '';
+        return '\x00DOMAIN_MATCH\x00' + sectionCtx + raw;
     }
 
     // PRIORITY 2: Find section where MOST ORIGINAL query words co-occur
@@ -810,25 +877,30 @@ function extractContextSnippet(body, queryWords, maxLen = 1200) {
 
     for (const section of sections) {
         const sectionLower = section.toLowerCase();
-        // Skip _AUTO_LOG and SESSION LOG sections — these are noise for snippets
-        if (sectionLower.startsWith('## _auto_log') || sectionLower.startsWith('## session log')) continue;
+        if (sectionLower.startsWith('## _auto_log') || sectionLower.startsWith('## session log') || sectionLower.startsWith('## _changelog')) continue;
+        const headerLine = (getSectionName(section) || '').toLowerCase();
         let sectionScore = 0;
         let uniqueOriginalMatched = 0;
         let uniqueExpandedMatched = 0;
         for (const word of queryWords) {
-            const matches = sectionLower.split(word).length - 1;
+            const isOriginal = originalWordsSet.has(word);
+            // v8.3: Header match — skip words <3 chars (prevent "pu" matching "jdihpu")
+            if (word.length >= 3 && headerLine.includes(word)) {
+                sectionScore += 10 * (isOriginal ? 3 : 1);
+                if (isOriginal) uniqueOriginalMatched++;
+            }
+            const matches = word.length >= 3
+                ? sectionLower.split(word).length - 1
+                : (sectionLower.match(new RegExp('\\b' + word.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\b', 'g')) || []).length;
             if (matches > 0) {
-                const isOriginal = originalWordsSet.has(word);
                 sectionScore += Math.min(5, matches) * (isOriginal ? 3 : 1);
                 if (isOriginal) uniqueOriginalMatched++;
                 else uniqueExpandedMatched++;
             }
         }
-        // Bonus for co-occurrence of ORIGINAL words (not expanded)
         sectionScore *= (1 + uniqueOriginalMatched * 0.5 + uniqueExpandedMatched * 0.1);
-        // Density bonus: smaller sections with many matches = more relevant
         const sectionLen = section.length;
-        if (sectionLen < 5000 && uniqueOriginalMatched >= 2) sectionScore *= 1.3;
+        if (sectionLen < 5000 && uniqueOriginalMatched >= 2) sectionScore *= 1.5;
         if (sectionScore > bestSectionScore) {
             bestSectionScore = sectionScore;
             bestSection = section;
@@ -909,6 +981,30 @@ export function searchRunbooks(queryStr, options = {}) {
                 // Success/verified boost
                 if (fts.success) score *= 1.1;
                 if (fts.verified) score *= 1.05;
+
+                // v8.0: Keyword density bonus — small files with high keyword density beat large files
+                const bodyLen = body.length;
+                if (bodyLen > 0 && bodyLen < 50000) {
+                    const bodyLower = body.toLowerCase();
+                    let origMatchCount = 0;
+                    for (const w of originalWords) {
+                        if (bodyLower.includes(w)) origMatchCount++;
+                    }
+                    const densityRatio = origMatchCount / originalWords.length;
+                    if (densityRatio >= 0.5) {
+                        score *= (1 + densityRatio * 0.5);
+                    }
+                }
+
+                // v8.0: Title exact match boost — title containing original words gets strong boost
+                const titleLower = (meta.title || '').toLowerCase();
+                let titleOrigMatches = 0;
+                for (const w of originalWords) {
+                    if (titleLower.includes(w)) titleOrigMatches++;
+                }
+                if (titleOrigMatches >= 2) {
+                    score *= (1 + titleOrigMatches * 0.3);
+                }
 
                 // Recency decay
                 if (fts.updated_at) {

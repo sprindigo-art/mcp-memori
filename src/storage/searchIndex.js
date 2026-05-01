@@ -169,8 +169,12 @@ function rebuildIndex() {
 
             const title = meta.title || filenameToTitle(file);
             const tags = Array.isArray(meta.tags) ? meta.tags.join(' ') : (meta.tags || '');
-            // Index first 200K chars of content (50K was too small — credential/persistence at bottom of large runbooks was unsearchable)
-            const contentForIndex = body.substring(0, 200000);
+            const bodySections = body.split(/(?=^## )/m);
+            const bodyClean = bodySections.filter(s => {
+                const h = s.toLowerCase();
+                return !h.startsWith('## _auto_log') && !h.startsWith('## session log') && !h.startsWith('## _changelog');
+            }).join('');
+            const contentForIndex = bodyClean.substring(0, 200000);
 
             upsertStmt.run(
                 file, title, tags, contentForIndex,
@@ -193,6 +197,14 @@ function rebuildIndex() {
     });
 
     transaction();
+
+    // Rebuild FTS5 from runbook_index (guaranteed 1 entry per file, no duplicates)
+    try {
+        db.prepare('DELETE FROM runbook_fts').run();
+        db.prepare('INSERT INTO runbook_fts(id, title, tags, content) SELECT id, title, tags, content FROM runbook_index').run();
+    } catch (err) {
+        logger.warn('FTS5 rebuild from runbook_index failed', { error: err.message });
+    }
 
     logger.info('Search index rebuilt', {
         indexed,
@@ -221,8 +233,16 @@ export function updateIndexEntry(filename) {
         const stat = statSync(filepath);
         const title = meta.title || filenameToTitle(filename);
         const tags = Array.isArray(meta.tags) ? meta.tags.join(' ') : (meta.tags || '');
-        const contentForIndex = body.substring(0, 200000);
+        const bodySections = body.split(/(?=^## )/m);
+        const bodyClean = bodySections.filter(s => {
+            const h = s.toLowerCase();
+            return !h.startsWith('## _auto_log') && !h.startsWith('## session log') && !h.startsWith('## _changelog');
+        }).join('');
+        const contentForIndex = bodyClean.substring(0, 200000);
         const now = new Date().toISOString();
+
+        // Explicit FTS5 cleanup before re-insert (triggers unreliable with INSERT OR REPLACE)
+        try { db.prepare('DELETE FROM runbook_fts WHERE id = ?').run(filename); } catch {}
 
         db.prepare(`
             INSERT OR REPLACE INTO runbook_index (id, title, tags, content, updated_at, file_size, access_count, success, verified, indexed_at)
@@ -287,13 +307,8 @@ export function ftsSearch(queryStr, options = {}) {
     if (words.length === 0) return null;
 
     try {
-        // Build FTS5 query: OR for 1-2 words, AND for 3+
-        // With prefix matching (*) for partial word support
-        const useAnd = words.length >= 3;
         const ftsTokens = words.slice(0, 8).map(w => `"${w}"*`);
-        const ftsQuery = useAnd ? ftsTokens.join(' AND ') : ftsTokens.join(' OR ');
-
-        const rows = db.prepare(`
+        const ftsQuery = `
             SELECT ri.id, ri.title, ri.tags, ri.updated_at, ri.file_size,
                    ri.access_count, ri.success, ri.verified,
                    bm25(runbook_fts, 0, 5.0, 3.0, 1.0) as bm25_score
@@ -301,37 +316,41 @@ export function ftsSearch(queryStr, options = {}) {
             JOIN runbook_index ri ON fts.id = ri.id
             WHERE runbook_fts MATCH ?
             ORDER BY bm25_score
-            LIMIT ?
-        `).all(ftsQuery, limit);
+            LIMIT ?`;
 
-        // If AND returned too few, fallback to OR
-        if (useAnd && rows.length < 3) {
-            const orQuery = ftsTokens.join(' OR ');
-            const orRows = db.prepare(`
-                SELECT ri.id, ri.title, ri.tags, ri.updated_at, ri.file_size,
-                       ri.access_count, ri.success, ri.verified,
-                       bm25(runbook_fts, 0, 5.0, 3.0, 1.0) as bm25_score
-                FROM runbook_fts fts
-                JOIN runbook_index ri ON fts.id = ri.id
-                WHERE runbook_fts MATCH ?
-                ORDER BY bm25_score
-                LIMIT ?
-            `).all(orQuery, limit);
-            return orRows.map(r => ({
-                ...r,
-                bm25_score: Math.abs(r.bm25_score),
-                tags: r.tags ? r.tags.split(' ') : []
-            }));
+        // v8.0: Always run OR query. For 3+ words, also run AND and merge.
+        // This ensures small files with high keyword density aren't lost.
+        const orQuery = ftsTokens.join(' OR ');
+        const orRows = db.prepare(ftsQuery).all(orQuery, limit);
+
+        let merged;
+        if (words.length >= 3) {
+            const andQuery = ftsTokens.join(' AND ');
+            let andRows = [];
+            try { andRows = db.prepare(ftsQuery).all(andQuery, limit); } catch {}
+            // Merge: AND results get 1.5x boost (more precise), dedup by id
+            const seen = new Map();
+            for (const r of andRows) {
+                seen.set(r.id, { ...r, bm25_score: Math.abs(r.bm25_score) * 1.5 });
+            }
+            for (const r of orRows) {
+                if (!seen.has(r.id)) {
+                    seen.set(r.id, { ...r, bm25_score: Math.abs(r.bm25_score) });
+                }
+            }
+            merged = [...seen.values()];
+        } else {
+            merged = orRows.map(r => ({ ...r, bm25_score: Math.abs(r.bm25_score) }));
         }
 
-        return rows.map(r => ({
+        merged.sort((a, b) => b.bm25_score - a.bm25_score);
+        return merged.slice(0, limit).map(r => ({
             ...r,
-            bm25_score: Math.abs(r.bm25_score), // BM25 returns negative in SQLite
             tags: r.tags ? r.tags.split(' ') : []
         }));
     } catch (err) {
         logger.warn('FTS search failed, will fallback to file scan', { error: err.message });
-        return null; // Signal to fallback
+        return null;
     }
 }
 

@@ -47,7 +47,11 @@ function hasTargetSignal(prompt) {
         'webshell', 'reverse shell', 'privesc', 'rce ', 'sqli', 'xss',
         'credential', 'ssh ', 'tunnel', 'proxmox', 'oracle', 'fpx',
         'payment', 'checkout', 'exploit', 'duitnow', 'hackerone',
-        'bugbounty', 'bug bounty', 'runbook', 'target'
+        'bugbounty', 'bug bounty', 'runbook', 'target',
+        'akses', 'login', 'password', 'vcenter', 'nutanix', 'zimbra',
+        'cpanel', 'cloudflare', 'persistence', 'tier 70', 'ssl',
+        'certbot', 'database', 'mysql', 'billing', 'clone',
+        'memori', 'search', 'teknik'
     ];
     if (techSignals.some(sig => lower.includes(sig))) return true;
     return false;

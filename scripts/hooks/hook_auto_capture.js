@@ -19,9 +19,10 @@ import {
     cleanForLog, shouldLogTool, formatToolInput, formatToolResponse
 } from './hook_lib.js';
 import { createHash } from 'crypto';
-import { existsSync } from 'fs';
+import { existsSync, readFileSync, writeFileSync } from 'fs';
 
 const OBS_DB_PATH = '/home/kali/Desktop/mcp-memori/data/search_index.db';
+const COUNTER_PATH = '/home/kali/Desktop/mcp-memori/data/.writeback_counter';
 
 async function writeObservation({ runbook_id, tool_name, tool_input_summary, tool_response_summary }) {
     try {
@@ -95,8 +96,17 @@ async function main() {
         const entry = cleaned + note;
 
         const target = resolveActiveTarget();
+
+        // v8.3: Skip logging to target runbook if tool call is clearly about
+        // MCP memori codebase itself (editing src/, scripts/, mcp.config.json)
+        // These pollute active target's _AUTO_LOG with unrelated development work
+        const inputStr = inputSummary.toLowerCase();
+        const isMcpDev = /mcp-memori\/src\/|mcp-memori\/scripts\/|mcp\.config\.json|hook_.*\.js|memory\.search|memory\.timeline|vectorIndex|searchIndex|graphIndex/.test(inputStr);
+        const isGitClone = /git\s+clone|claude-mem/.test(inputStr);
+        const logTarget = (isMcpDev || isGitClone) ? null : target;
+
         const ok = await callAutolog({
-            target,
+            target: logTarget,
             entry,
             event_type: 'tool_use',
             tool_name: toolName
@@ -110,12 +120,30 @@ async function main() {
             tool_response_summary: responseSummary.substring(0, 300)
         });
 
+        // v8.3: Writeback counter — track tool calls since last memory_upsert
+        // Reset on upsert, increment on side-effect tools. Warn at >10.
+        const isWriteback = toolName.includes('memory_upsert');
+        let counter = 0;
+        try { counter = parseInt(readFileSync(COUNTER_PATH, 'utf8')) || 0; } catch {}
+        counter = isWriteback ? 0 : counter + 1;
+        try { writeFileSync(COUNTER_PATH, String(counter)); } catch {}
+
+        if (counter >= 10) {
+            process.stdout.write(JSON.stringify({
+                hookSpecificOutput: {
+                    hookEventName: 'PostToolUse',
+                    additionalContext: `⚠️ WRITEBACK WARNING: ${counter} tool calls tanpa memory_upsert. Simpan progress SEKARANG sebelum compaction menghapus data. Jalankan memory_get lalu memory_upsert.`
+                }
+            }));
+        }
+
         hookLog('INFO', 'PostToolUse logged', {
             tool: toolName,
             target: target || '_AUTO_LOG_UNIFIED',
             entry_len: entry.length,
             redactions,
-            ok
+            ok,
+            writeback_counter: counter
         });
     } catch (err) {
         hookLog('ERROR', 'PostToolUse exception', { error: err?.message });

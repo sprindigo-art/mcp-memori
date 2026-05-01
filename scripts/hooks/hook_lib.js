@@ -200,13 +200,18 @@ export function formatToolResponse(toolResponse) {
         return `ERROR: ${errText.substring(0, 300)}`;
     }
 
-    // Bash: stdout + stderr summary
+    // Bash: stdout + stderr summary — strip SSH warnings that repeat on every command
     if (toolResponse.stdout !== undefined || toolResponse.stderr !== undefined) {
-        const out = String(toolResponse.stdout || '').trim();
+        let out = String(toolResponse.stdout || '').trim();
         const err = String(toolResponse.stderr || '').trim();
+        // Strip repetitive SSH/OpenSSH warnings (3 lines per command, 20%+ of auto-log)
+        out = out.replace(/\*\*\s*WARNING:.*post-quantum.*\n?/gi, '')
+                 .replace(/\*\*\s*This session may be vulnerable.*\n?/gi, '')
+                 .replace(/\*\*\s*The server may need to be upgraded.*openssh.*\n?/gi, '')
+                 .replace(/\n{3,}/g, '\n').trim();
         const parts = [];
-        if (out) parts.push(`stdout: ${out.substring(0, 400)}`);
-        if (err) parts.push(`stderr: ${err.substring(0, 200)}`);
+        if (out) parts.push(`stdout: ${out.substring(0, 300)}`);
+        if (err) parts.push(`stderr: ${err.substring(0, 150)}`);
         return parts.join(' | ') || '<empty>';
     }
 

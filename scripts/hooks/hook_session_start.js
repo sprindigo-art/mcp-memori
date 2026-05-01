@@ -112,6 +112,9 @@ async function main() {
         parts.push('');
         parts.push(`> Gunakan \`memory_get({id:"${filepath.split('/').pop()}"})\` untuk full runbook.`);
         parts.push(`> SECTION STATE tetap hard-block: wajib \`memory_get\` sebelum \`memory_upsert\` ke CREDENTIAL/EXPLOIT/GAGAL/LIVE STATUS/RE-ENTRY CHECKLIST.`);
+        if (source === 'compact') {
+            parts.push(`\n> ⚠️ POST-COMPACTION: Context percakapan HILANG. WAJIB \`memory_get\` runbook UTUH sebelum action apapun. DILARANG tebak state — baca dulu.`);
+        }
 
         let context = parts.join('\n');
         if (context.length > MAX_CONTEXT_CHARS) {

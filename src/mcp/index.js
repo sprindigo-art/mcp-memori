@@ -11,9 +11,10 @@ import summarizeTool from './tools/memory.summarize.js';
 import statsTool from './tools/memory.stats.js';
 import listTool from './tools/memory.list.js';
 import autologTool from './tools/memory.autolog.js';
+import timelineTool from './tools/memory.timeline.js';
 
 /**
- * All available tools (8 tools — v7.6 added memory_autolog for hook-driven capture)
+ * All available tools (9 tools — v8.0 added memory_timeline for chronological context)
  */
 export const tools = {
     'memory_search': searchTool,
@@ -23,7 +24,8 @@ export const tools = {
     'memory_summarize': summarizeTool,
     'memory_stats': statsTool,
     'memory_list': listTool,
-    'memory_autolog': autologTool
+    'memory_autolog': autologTool,
+    'memory_timeline': timelineTool
 };
 
 /**

@@ -1,7 +1,7 @@
 {
     "name": "mcp-memori",
-    "version": "7.6.0",
-    "description": "MCP Memory Server v7.6 — File-based .md Runbooks + Hook Auto-Capture + Intelligence Layer (v7.5 base + PostToolUse/SessionStart/Stop/PreCompact hooks, memory_autolog, privacy scrubber)",
+    "version": "8.0.0",
+    "description": "MCP Memory Server v8.0 — File-based .md Runbooks + Hook Auto-Capture + Intelligence Layer + Timeline + Readable Search + Session Summary (v7.6 base + memory_timeline, table-format search, template-based session summaries)",
     "transport": {
         "type": "stdio"
     },
@@ -37,6 +37,10 @@
         {
             "name": "memory_autolog",
             "description": "Internal tool — hook-driven auto-capture ke section ## _AUTO_LOG. Bypass hard-block HANYA untuk section _AUTO_LOG (append-only log, bukan state). Section state (CREDENTIAL/EXPLOIT/LIVE STATUS) tetap via memory_upsert dengan hard-block. AI manual pakai memory_upsert, bukan ini."
+        },
+        {
+            "name": "memory_timeline",
+            "description": "Lihat konteks kronologis di sekitar suatu event. Tampilkan N entries sebelum/sesudah anchor (observation ID atau runbook _AUTO_LOG). Berguna untuk memahami apa yang terjadi sebelum/sesudah suatu aksi."
         }
     ]
 }

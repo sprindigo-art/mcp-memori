@@ -18,7 +18,7 @@
  *   MCP_MEMORI_LLM_TIMEOUT=45000   override CLI timeout (ms)
  *   MCP_MEMORI_LLM_MIN_ENTRIES=3   skip if fewer entries in window
  */
-import { readFileSync, writeFileSync, existsSync, copyFileSync, renameSync, appendFileSync, mkdirSync } from 'fs';
+import { readFileSync, writeFileSync, existsSync, copyFileSync, renameSync, appendFileSync, mkdirSync, unlinkSync } from 'fs';
 import { spawn } from 'child_process';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
@@ -199,6 +199,23 @@ async function main() {
     const minEntries = parseInt(process.env.MCP_MEMORI_LLM_MIN_ENTRIES || '3', 10);
     const timeoutMs = parseInt(process.env.MCP_MEMORI_LLM_TIMEOUT || '45000', 10);
 
+    // PID LOCK: prevent multiple workers from running simultaneously
+    const pidLockPath = join(dirname(filepath), '.llm_worker.pid');
+    if (existsSync(pidLockPath)) {
+        try {
+            const pidData = readFileSync(pidLockPath, 'utf8').trim();
+            const [pidStr, tsStr] = pidData.split(':');
+            const lockPid = parseInt(pidStr, 10);
+            const lockAge = Date.now() - parseInt(tsStr || '0', 10);
+            // Check if process still alive AND lock is < 2 minutes old
+            if (lockAge < 120000) {
+                try { process.kill(lockPid, 0); log('INFO', 'another worker still running, skip', { pid: lockPid, age_sec: Math.round(lockAge/1000) }); process.exit(0); } catch {}
+            }
+            // Stale lock — remove and continue
+        } catch {}
+    }
+    writeFileSync(pidLockPath, `${process.pid}:${Date.now()}`, 'utf8');
+
     let lockHeld = false;
     try {
         const raw = readFileSync(filepath, 'utf8');
@@ -206,19 +223,21 @@ async function main() {
         const entries = parseAutologEntries(body, sinceMs);
         if (entries.length < minEntries) {
             log('INFO', 'below min_entries, skip', { target, entries: entries.length, min: minEntries });
+            try { unlinkSync(pidLockPath); } catch {}
             process.exit(0);
         }
 
-        // Anti-duplicate: if last SESSION LOG [LLM] entry was <10 min ago, skip
-        const sessionIdx = body.indexOf('## SESSION LOG');
-        if (sessionIdx >= 0) {
-            const sessionEnd = findSectionEnd(body, sessionIdx);
-            const sessionBlock = body.substring(sessionIdx, sessionEnd);
-            const lastLlm = sessionBlock.match(/### \[LLM\] (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})/);
-            if (lastLlm) {
-                const lastMs = Date.parse(lastLlm[1].replace(' ', 'T') + 'Z');
-                if (!isNaN(lastMs) && Date.now() - lastMs < 10 * 60 * 1000) {
-                    log('INFO', 'recent LLM summary exists, skip', { target, age_sec: Math.round((Date.now() - lastMs) / 1000) });
+        // Anti-duplicate: check ACTIVITY SUMMARY section (not SESSION LOG)
+        const activityIdx = body.indexOf('## ACTIVITY SUMMARY');
+        if (activityIdx >= 0) {
+            const activityEnd = findSectionEnd(body, activityIdx);
+            const activityBlock = body.substring(activityIdx, activityEnd);
+            const lastEntry = activityBlock.match(/### \[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]/);
+            if (lastEntry) {
+                const lastMs = Date.parse(lastEntry[1].replace(' ', 'T') + 'Z');
+                if (!isNaN(lastMs) && Date.now() - lastMs < 15 * 60 * 1000) {
+                    log('INFO', 'recent activity summary exists, skip', { target, age_sec: Math.round((Date.now() - lastMs) / 1000) });
+                    try { unlinkSync(pidLockPath); } catch {}
                     process.exit(0);
                 }
             }
@@ -250,11 +269,13 @@ async function main() {
         log('ERROR', 'worker exception', { error: err?.message });
     } finally {
         if (lockHeld) { try { releaseLock(filepath); } catch {} }
+        try { unlinkSync(pidLockPath); } catch {}
     }
     process.exit(0);
 }
 
 main().catch((err) => {
     log('FATAL', 'worker fatal', { error: err?.message });
+    try { unlinkSync(join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'runbooks', '.llm_worker.pid')); } catch {}
     process.exit(0);
 });
