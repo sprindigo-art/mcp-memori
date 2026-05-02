@@ -30,7 +30,8 @@ function findRunbookPath(target) {
 async function main() {
     const input = readStdinJson();
     const trigger = input?.trigger || 'unknown'; // "auto" or "manual"
-    const target = resolveActiveTarget();
+    const sessionId = input?.session_id || null;
+    const target = resolveActiveTarget(sessionId);
 
     try {
         // 1. Append compaction marker to _AUTO_LOG for post-mortem forensic

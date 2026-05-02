@@ -16,7 +16,8 @@
  */
 import {
     readStdinJson, hookLog, resolveActiveTarget, callAutolog,
-    cleanForLog, shouldLogTool, formatToolInput, formatToolResponse
+    cleanForLog, shouldLogTool, formatToolInput, formatToolResponse,
+    setSessionTarget, extractTargetFromToolCall
 } from './hook_lib.js';
 import { createHash } from 'crypto';
 import { existsSync, readFileSync, writeFileSync } from 'fs';
@@ -79,6 +80,7 @@ async function main() {
     }
 
     const toolName = input.tool_name || input.tool || 'unknown';
+    const sessionId = input.session_id || null;
 
     if (!shouldLogTool(toolName)) {
         // Silent skip for read-only tools
@@ -95,7 +97,13 @@ async function main() {
         const note = redactions > 0 ? ` [${redactions} redacted]` : '';
         const entry = cleaned + note;
 
-        const target = resolveActiveTarget();
+        // v8.4: Auto-detect target from memory_get/memory_upsert and persist per-session
+        const detectedTarget = extractTargetFromToolCall(toolName, input.tool_input || input.input);
+        if (detectedTarget && sessionId) {
+            setSessionTarget(sessionId, detectedTarget);
+        }
+
+        const target = resolveActiveTarget(sessionId);
 
         // v8.3: Skip logging to target runbook if tool call is clearly about
         // MCP memori codebase itself (editing src/, scripts/, mcp.config.json)
@@ -123,10 +131,11 @@ async function main() {
         // v8.3: Writeback counter — track tool calls since last memory_upsert
         // Reset on upsert, increment on side-effect tools. Warn at >10.
         const isWriteback = toolName.includes('memory_upsert');
+        const counterPath = sessionId ? `/tmp/mcp-memori-counter-${sessionId.replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 100)}` : COUNTER_PATH;
         let counter = 0;
-        try { counter = parseInt(readFileSync(COUNTER_PATH, 'utf8')) || 0; } catch {}
+        try { counter = parseInt(readFileSync(counterPath, 'utf8')) || 0; } catch {}
         counter = isWriteback ? 0 : counter + 1;
-        try { writeFileSync(COUNTER_PATH, String(counter)); } catch {}
+        try { writeFileSync(counterPath, String(counter)); } catch {}
 
         if (counter >= 10) {
             process.stdout.write(JSON.stringify({

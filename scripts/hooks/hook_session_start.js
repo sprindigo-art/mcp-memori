@@ -56,7 +56,8 @@ async function main() {
     const input = readStdinJson();
     const source = input?.source || 'unknown';
 
-    const target = resolveActiveTarget();
+    const sessionId = input?.session_id || null;
+    const target = resolveActiveTarget(sessionId);
     if (!target) {
         // No active target — output empty context, don't inject noise
         process.stdout.write(JSON.stringify({

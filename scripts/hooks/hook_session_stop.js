@@ -16,7 +16,7 @@ import { readFileSync, existsSync } from 'fs';
 import { spawn } from 'child_process';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { readStdinJson, hookLog, resolveActiveTarget } from './hook_lib.js';
+import { readStdinJson, hookLog, resolveActiveTarget, clearSessionTarget } from './hook_lib.js';
 import {
     RUNBOOKS_DIR, titleToFilename, findByTitle, findByFuzzyTitle,
     parseFrontmatter, findSectionEnd
@@ -139,7 +139,8 @@ function buildTemplateSummary(entries) {
 
 async function main() {
     const input = readStdinJson();
-    const target = resolveActiveTarget();
+    const sessionId = input?.session_id || null;
+    const target = resolveActiveTarget(sessionId);
 
     if (!target) {
         hookLog('INFO', 'Stop: no active target, skip');
@@ -219,6 +220,16 @@ async function main() {
         } catch (err) {
             hookLog('WARN', 'Stop: LLM error', { error: err?.message });
         }
+    }
+
+    // Cleanup per-session temp files
+    if (sessionId) {
+        clearSessionTarget(sessionId);
+        try {
+            const cp = `/tmp/mcp-memori-counter-${sessionId.replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 100)}`;
+            const { existsSync: ex2, unlinkSync: ul2 } = await import('fs');
+            if (ex2(cp)) ul2(cp);
+        } catch {}
     }
 
     process.exit(0);

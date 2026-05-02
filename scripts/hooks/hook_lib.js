@@ -11,7 +11,7 @@
  * No MCP JSON-RPC handshake needed — file-based storage is independent
  * of MCP server. File locking in files.js handles concurrent writes.
  */
-import { readFileSync, existsSync, statSync, readdirSync, appendFileSync, mkdirSync, fstatSync } from 'fs';
+import { readFileSync, existsSync, statSync, readdirSync, appendFileSync, mkdirSync, fstatSync, writeFileSync, unlinkSync } from 'fs';
 import { join, dirname } from 'path';
 import { execute as autologExecute } from '../../src/mcp/tools/memory.autolog.js';
 import { scrub, truncate } from '../../src/utils/scrubber.js';
@@ -60,13 +60,65 @@ export function hookLog(level, message, meta = {}) {
 
 /**
  * Resolve currently active target runbook.
- * Strategy:
+ * Strategy (ordered by priority):
+ * 0. Per-session target from /tmp/mcp-memori-target-{session_id} (race-safe)
  * 1. Read MEMORY.md "TARGET AKTIF TERAKHIR" pointer (if exists).
  * 2. Fallback: most-recently-modified RUNBOOK_*.md file (excluding _AUTO_LOG_UNIFIED).
  * 3. Fallback: null → autolog will use _AUTO_LOG_UNIFIED fallback.
  */
-export function resolveActiveTarget() {
-    // Strategy 1: MEMORY.md pointer
+export function sessionTargetPath(sessionId) {
+    if (!sessionId || typeof sessionId !== 'string') return null;
+    const safe = sessionId.replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 100);
+    return `/tmp/mcp-memori-target-${safe}`;
+}
+
+export function getSessionTarget(sessionId) {
+    const path = sessionTargetPath(sessionId);
+    if (!path) return null;
+    try {
+        if (!existsSync(path)) return null;
+        return readFileSync(path, 'utf8').trim() || null;
+    } catch { return null; }
+}
+
+export function setSessionTarget(sessionId, target) {
+    const path = sessionTargetPath(sessionId);
+    if (!path || !target) return;
+    try { writeFileSync(path, target, 'utf8'); } catch {}
+}
+
+export function clearSessionTarget(sessionId) {
+    const path = sessionTargetPath(sessionId);
+    if (!path) return;
+    try { if (existsSync(path)) unlinkSync(path); } catch {}
+}
+
+export function extractTargetFromToolCall(toolName, toolInput) {
+    if (!toolName || !toolInput) return null;
+    const name = toolName.toLowerCase();
+    if (name.includes('memory_get')) {
+        const id = toolInput.id || '';
+        if (id.startsWith('RUNBOOK_') && id.endsWith('.md') && !id.includes('UNIFIED'))
+            return id.replace(/^RUNBOOK_/, '').replace(/\.md$/, '');
+    }
+    if (name.includes('memory_upsert')) {
+        const items = toolInput.items;
+        if (Array.isArray(items) && items.length > 0) {
+            const m = (items[0].title || '').match(/^\[RUNBOOK\]\s*(.+)$/i);
+            if (m && m[1]) return m[1].trim();
+        }
+    }
+    return null;
+}
+
+export function resolveActiveTarget(sessionId = null) {
+    // Strategy 0: Per-session target (race-safe for multi-instance)
+    if (sessionId) {
+        const st = getSessionTarget(sessionId);
+        if (st) return st;
+    }
+
+    // Strategy 1: MEMORY.md pointer (global fallback)
     try {
         if (existsSync(AUTO_MEMORY_PATH)) {
             const content = readFileSync(AUTO_MEMORY_PATH, 'utf8');
@@ -80,7 +132,7 @@ export function resolveActiveTarget() {
         }
     } catch { /* ignore */ }
 
-    // Strategy 2: most-recent RUNBOOK_*.md
+    // Strategy 2: most-recent RUNBOOK_*.md (global fallback)
     try {
         const files = readdirSync(RUNBOOKS_DIR)
             .filter(f => f.startsWith('RUNBOOK_') && f.endsWith('.md') && !f.includes('_AUTO_LOG_UNIFIED'))
@@ -90,9 +142,7 @@ export function resolveActiveTarget() {
             }))
             .sort((a, b) => b.mtime - a.mtime);
         if (files.length > 0) {
-            // Extract target from filename: RUNBOOK_example.com.md → example.com
             const top = files[0].file.replace(/^RUNBOOK_/, '').replace(/\.md$/, '');
-            // Skip if recent file is stale (>7 days) — probably no active session
             const ageHours = (Date.now() - files[0].mtime) / (1000 * 60 * 60);
             if (ageHours < 24 * 7) return top;
         }
@@ -245,5 +295,10 @@ export default {
     cleanForLog,
     shouldLogTool,
     formatToolInput,
-    formatToolResponse
+    formatToolResponse,
+    sessionTargetPath,
+    getSessionTarget,
+    setSessionTarget,
+    clearSessionTarget,
+    extractTargetFromToolCall
 };
