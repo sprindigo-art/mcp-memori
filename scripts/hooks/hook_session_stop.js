@@ -12,7 +12,7 @@
  * Unlike claude-mem's Stop hook which calls SDKAgent/Gemini/OpenRouter,
  * this runs purely on regex — no API key, no network, no dependency.
  */
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync, existsSync, appendFileSync, mkdirSync } from 'fs';
 import { spawn } from 'child_process';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -23,6 +23,30 @@ import {
 } from '../../src/storage/files.js';
 
 const LOOKBACK_HOURS = 4;
+const SESSION_LOG_MAX_SIZE = 50 * 1024; // 50KB → rotate
+const SESSION_LOG_KEEP_SESSIONS = 10;   // keep last 10 sessions
+const ARCHIVE_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'archives');
+
+function rotateSessionLog(existingLog, runbookFilename) {
+    const sessions = existingLog.split(/(?=^### Session )/m);
+    const header = sessions[0]; // "## SESSION LOG\n"
+    const entries = sessions.slice(1);
+    if (entries.length <= SESSION_LOG_KEEP_SESSIONS) return { log: existingLog, rotated: false };
+    const keep = entries.slice(-SESSION_LOG_KEEP_SESSIONS);
+    const archive = entries.slice(0, -SESSION_LOG_KEEP_SESSIONS);
+    try {
+        mkdirSync(ARCHIVE_DIR, { recursive: true });
+        const date = new Date().toISOString().split('T')[0];
+        const baseName = (runbookFilename || 'unknown').replace(/\.md$/, '');
+        const archivePath = join(ARCHIVE_DIR, `${baseName}_sessionlog_${date}.log`);
+        appendFileSync(archivePath, archive.join(''), 'utf8');
+        hookLog('INFO', 'SessionLog rotated', { archived: archive.length, kept: keep.length, path: archivePath });
+    } catch (err) {
+        hookLog('WARN', 'SessionLog archive failed', { error: err?.message });
+    }
+    const marker = `[${new Date().toISOString().split('T')[0]}] SESSION LOG rotated, ${archive.length} older sessions archived\n\n`;
+    return { log: header + marker + keep.join(''), rotated: true };
+}
 
 function findRunbookPath(target) {
     if (!target) return null;
@@ -179,7 +203,13 @@ async function main() {
         if (body.includes(sessionLogHeader)) {
             const slIdx = body.indexOf(sessionLogHeader);
             const slEnd = findSectionEnd(body, slIdx);
-            const existingLog = body.substring(slIdx, slEnd);
+            let existingLog = body.substring(slIdx, slEnd);
+            // v8.4: Rotate SESSION LOG if >50KB (archive old sessions, keep last 10)
+            if (existingLog.length > SESSION_LOG_MAX_SIZE) {
+                const fn = filepath ? filepath.split('/').pop() : target;
+                const { log: rotatedLog } = rotateSessionLog(existingLog, fn);
+                existingLog = rotatedLog;
+            }
             newBody = body.substring(0, slIdx) + existingLog.trimEnd() + '\n\n' + summary + '\n\n' + body.substring(slEnd);
         } else {
             const autoLogIdx = body.indexOf('## _AUTO_LOG');
