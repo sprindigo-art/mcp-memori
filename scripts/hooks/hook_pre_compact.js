@@ -12,7 +12,7 @@
 import { readFileSync, existsSync, openSync, fsyncSync, closeSync } from 'fs';
 import { join } from 'path';
 import { readStdinJson, hookLog, resolveActiveTarget, callAutolog } from './hook_lib.js';
-import { RUNBOOKS_DIR, titleToFilename, findByTitle, findByFuzzyTitle } from '../../src/storage/files.js';
+import { RUNBOOKS_DIR, titleToFilename, findByTitle, findByFuzzyTitle, parseFrontmatter, findSectionEnd } from '../../src/storage/files.js';
 
 function findRunbookPath(target) {
     if (!target) return null;
@@ -66,10 +66,14 @@ async function main() {
             if (rbPath && existsSync(rbPath)) {
                 try {
                     const rbContent = readFileSync(rbPath, 'utf8');
+                    const { body: rbBody } = parseFrontmatter(rbContent);
                     const extractSection = (name) => {
-                        const regex = new RegExp(`^## ${name}[\\s\\S]*?(?=^## |$)`, 'mi');
-                        const m = regex.exec(rbContent);
-                        return m ? m[0].substring(0, 600).trim() : '';
+                        const header = `## ${name}`;
+                        const regex = new RegExp(`^${header.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'im');
+                        const m = regex.exec(rbBody);
+                        if (!m) return '';
+                        const end = findSectionEnd(rbBody, m.index);
+                        return rbBody.substring(m.index, end).substring(0, 600).trim();
                     };
                     const live = extractSection('LIVE STATUS');
                     const reentry = extractSection('RE-ENTRY CHECKLIST');

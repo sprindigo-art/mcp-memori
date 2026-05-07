@@ -31,7 +31,8 @@ function acquireLock(filepath) {
                 return;
             }
         } catch {}
-        const lockAge = Date.now() - statSync(lockPath).mtimeMs;
+        let lockAge = maxWaitMs + 1;
+        try { lockAge = Date.now() - statSync(lockPath).mtimeMs; } catch { break; }
         if (lockAge > maxWaitMs) {
             try { unlinkSync(lockPath); } catch {}
             break;

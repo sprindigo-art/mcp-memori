@@ -477,6 +477,7 @@ export async function execute(params) {
                     }
                 } catch (appendErr) {
                     logger.error('Append to section error', { error: appendErr.message, filename: actualFilename });
+                    continue;
                 }
             }
 
@@ -546,6 +547,7 @@ export async function execute(params) {
                     }
                 } catch (replaceErr) {
                     logger.error('Replace text error', { error: replaceErr.message, filename: actualFilename });
+                    continue;
                 }
             }
 
@@ -623,6 +625,7 @@ export async function execute(params) {
                     }
                 } catch (replaceErr) {
                     logger.error('Replace section error', { error: replaceErr.message, filename: actualFilename });
+                    continue;
                 }
             }
 

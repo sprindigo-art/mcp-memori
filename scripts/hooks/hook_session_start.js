@@ -16,7 +16,7 @@ import { join } from 'path';
 import { readStdinJson, hookLog, resolveActiveTarget } from './hook_lib.js';
 import {
     RUNBOOKS_DIR, titleToFilename, findByTitle, findByFuzzyTitle,
-    parseFrontmatter, findSectionEnd, isMajorSection
+    parseFrontmatter, findSectionEnd
 } from '../../src/storage/files.js';
 
 const MAX_CONTEXT_CHARS = 2500;
