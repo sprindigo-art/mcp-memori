@@ -17,7 +17,7 @@
 import {
     readStdinJson, hookLog, resolveActiveTarget, callAutolog,
     cleanForLog, shouldLogTool, formatToolInput, formatToolResponse,
-    setSessionTarget, extractTargetFromToolCall
+    setSessionTarget, getSessionTarget, extractTargetFromToolCall
 } from './hook_lib.js';
 import { createHash } from 'crypto';
 import { existsSync, readFileSync, writeFileSync } from 'fs';
@@ -97,10 +97,16 @@ async function main() {
         const note = redactions > 0 ? ` [${redactions} redacted]` : '';
         const entry = cleaned + note;
 
-        // v8.4: Auto-detect target from memory_get/memory_upsert and persist per-session
+        // v8.5: Auto-detect target — only memory_upsert switches session target
+        // memory_get = reading for reference, NOT "I'm working on this target"
+        // memory_get only sets target if session has no target yet (first-time init)
         const detectedTarget = extractTargetFromToolCall(toolName, input.tool_input || input.input);
         if (detectedTarget && sessionId) {
-            setSessionTarget(sessionId, detectedTarget);
+            const isUpsert = toolName.toLowerCase().includes('memory_upsert');
+            const existing = getSessionTarget(sessionId);
+            if (isUpsert || !existing) {
+                setSessionTarget(sessionId, detectedTarget);
+            }
         }
 
         const target = resolveActiveTarget(sessionId);
@@ -111,7 +117,9 @@ async function main() {
         const inputStr = inputSummary.toLowerCase();
         const isMcpDev = /mcp-memori\/src\/|mcp-memori\/scripts\/|mcp\.config\.json|hook_.*\.js|memory\.search|memory\.timeline|vectorIndex|searchIndex|graphIndex/.test(inputStr);
         const isGitClone = /git\s+clone|claude-mem/.test(inputStr);
-        const logTarget = (isMcpDev || isGitClone) ? null : target;
+        // v8.5: Filter subagent task files + Claude internal temp files → UNIFIED
+        const isInternalFile = /\/tmp\/claude-[^/]*\/.*\/tasks\/|\.claude\/projects\/[^/]*\/tool-results\//.test(inputStr);
+        const logTarget = (isMcpDev || isGitClone || isInternalFile) ? null : target;
 
         const ok = await callAutolog({
             target: logTarget,

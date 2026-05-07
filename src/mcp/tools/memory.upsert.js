@@ -5,7 +5,7 @@
  * WAJIB memory_get dulu jika runbook SUDAH ADA — agar tahu isinya sebelum append
  * @module mcp/tools/memory.upsert
  */
-import { saveRunbook, titleToFilename, findByTitle, findByFuzzyTitle, RUNBOOKS_DIR, parseFrontmatter, buildFrontmatter, filterNoiseTags, appendToSection, findSectionEnd, isMajorSection, atomicWriteFileSync } from '../../storage/files.js';
+import { saveRunbook, titleToFilename, findByTitle, findByFuzzyTitle, RUNBOOKS_DIR, parseFrontmatter, buildFrontmatter, filterNoiseTags, appendToSection, findSectionEnd, isMajorSection, atomicWriteFileSync, acquireLock, releaseLock } from '../../storage/files.js';
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { join, basename } from 'path';
 import { v4 as uuidv4 } from 'uuid';
@@ -23,16 +23,17 @@ const contentDedupMap = new Map();
 
 function isContentHashDuplicate(sectionName, content) {
     const now = Date.now();
+    const COOLDOWN_MS = 600000; // 10 minutes (was 120s — too short, post-compaction re-upsert lolos)
     if (contentDedupMap.size > 500) {
         for (const [k, v] of contentDedupMap) {
-            if ((now - v) > 120000) contentDedupMap.delete(k);
+            if ((now - v) > COOLDOWN_MS) contentDedupMap.delete(k);
         }
     }
     const trimmed = (content || '').trim().substring(0, 150);
     const hashInput = (sectionName || '') + '::' + trimmed;
     const hash = createHash('sha256').update(hashInput, 'utf8').digest('hex');
     const existing = contentDedupMap.get(hash);
-    if (existing && (now - existing) < 120000) return true;
+    if (existing && (now - existing) < COOLDOWN_MS) return true;
     contentDedupMap.set(hash, now);
     return false;
 }
@@ -409,6 +410,7 @@ export async function execute(params) {
 
             // === APPEND TO SECTION MODE: Tambah content ke END of section yang benar ===
             // PRESERVES semua content lama di section. Ideal untuk: credential, gagal, exploit, persistence
+            // v8.5: Full read→check→write wrapped in file lock to prevent multi-AI race condition
             if (item.append_to_section && fileExists) {
                 try {
                     if (isContentHashDuplicate(item.append_to_section, content)) {
@@ -419,135 +421,129 @@ export async function execute(params) {
                         continue;
                     }
 
-                    const raw = readFileSync(filepath, 'utf8');
-                    const { meta, body } = parseFrontmatter(raw);
-
-                    const { body: newBody, action: appendAction, contradiction } = appendToSection(body, item.append_to_section, content);
-
-                    // Collect contradiction warning for post-loop reminders
-                    if (contradiction) {
-                        contradictions.push(`⚠️ CONTRADICTION in ## ${item.append_to_section} of ${actualFilename}: ${contradiction}`);
-                    }
-
-                    if (appendAction === 'skipped_duplicate' || appendAction === 'skipped_near_duplicate') {
-                        results.push({
-                            id: actualFilename, version: meta.version || 1, status: 'active',
-                            action: appendAction, section: item.append_to_section, filepath
-                        });
-                        if (appendAction === 'skipped_near_duplicate') {
-                            contradictions.push(`ℹ️ NEAR-DUPLICATE BLOCKED: >80% baris content sudah ada di ## ${item.append_to_section} — skip untuk cegah duplikasi.`);
-                        }
-                        continue;
-                    }
-
-                    // Merge tags
-                    const oldTags = Array.isArray(meta.tags) ? meta.tags : [];
-                    meta.tags = filterNoiseTags([...new Set([...oldTags, ...tags.map(t => t.toLowerCase())])]);
-                    meta.updated = new Date().toISOString();
-                    meta.version = (meta.version || 1) + 1;
-                    if (options.success !== undefined) meta.success = options.success;
-
-                    atomicWriteFileSync(filepath, buildFrontmatter(meta) + newBody.trim() + '\n', 'utf8');
-                    invalidateGetCache(actualFilename);
-                    updateAllIndexes(actualFilename);
-                    updateActiveTarget(title, actualFilename);
-
-                    logger.info('SECTION APPEND', {
-                        filename: actualFilename, section: item.append_to_section,
-                        action: appendAction, added_chars: content.length
-                    });
-
-                    // v7.5 Aturan 20: Post-write verification — read back section size
-                    let verifiedChars = 0;
+                    acquireLock(filepath);
                     try {
-                        const verifyRaw = readFileSync(filepath, 'utf8');
-                        const { body: verifyBody } = parseFrontmatter(verifyRaw);
-                        verifiedChars = verifyBody.length;
-                    } catch {}
+                        const raw = readFileSync(filepath, 'utf8');
+                        const { meta, body } = parseFrontmatter(raw);
 
-                    results.push({
-                        id: actualFilename, version: meta.version, status: 'active',
-                        action: appendAction, section: item.append_to_section, filepath,
-                        verified_total_chars: verifiedChars
-                    });
-                    continue;
+                        const { body: newBody, action: appendAction, contradiction } = appendToSection(body, item.append_to_section, content);
+
+                        if (contradiction) {
+                            contradictions.push(`⚠️ CONTRADICTION in ## ${item.append_to_section} of ${actualFilename}: ${contradiction}`);
+                        }
+
+                        if (appendAction === 'skipped_duplicate' || appendAction === 'skipped_near_duplicate') {
+                            results.push({
+                                id: actualFilename, version: meta.version || 1, status: 'active',
+                                action: appendAction, section: item.append_to_section, filepath
+                            });
+                            if (appendAction === 'skipped_near_duplicate') {
+                                contradictions.push(`ℹ️ NEAR-DUPLICATE BLOCKED: >60% baris content sudah ada di ## ${item.append_to_section} — skip untuk cegah duplikasi.`);
+                            }
+                            continue;
+                        }
+
+                        const oldTags = Array.isArray(meta.tags) ? meta.tags : [];
+                        meta.tags = filterNoiseTags([...new Set([...oldTags, ...tags.map(t => t.toLowerCase())])]);
+                        meta.updated = new Date().toISOString();
+                        meta.version = (meta.version || 1) + 1;
+                        if (options.success !== undefined) meta.success = options.success;
+
+                        atomicWriteFileSync(filepath, buildFrontmatter(meta) + newBody.trim() + '\n', 'utf8');
+                        invalidateGetCache(actualFilename);
+                        updateAllIndexes(actualFilename);
+                        updateActiveTarget(title, actualFilename);
+
+                        logger.info('SECTION APPEND', {
+                            filename: actualFilename, section: item.append_to_section,
+                            action: appendAction, added_chars: content.length
+                        });
+
+                        let verifiedChars = 0;
+                        try {
+                            const verifyRaw = readFileSync(filepath, 'utf8');
+                            const { body: verifyBody } = parseFrontmatter(verifyRaw);
+                            verifiedChars = verifyBody.length;
+                        } catch {}
+
+                        results.push({
+                            id: actualFilename, version: meta.version, status: 'active',
+                            action: appendAction, section: item.append_to_section, filepath,
+                            verified_total_chars: verifiedChars
+                        });
+                        continue;
+                    } finally {
+                        releaseLock(filepath);
+                    }
                 } catch (appendErr) {
                     logger.error('Append to section error', { error: appendErr.message, filename: actualFilename });
                 }
             }
 
             // === REPLACE TEXT MODE: Edit spesifik — cari teks lama, ganti dengan teks baru ===
-            // Sama seperti Edit tool — surgical edit tanpa replace seluruh section
+            // v8.5: Full read→check→write wrapped in file lock to prevent multi-AI race condition
             if (item.replace_text && fileExists) {
                 try {
-                    const raw = readFileSync(filepath, 'utf8');
-                    const { meta, body } = parseFrontmatter(raw);
-                    const oldText = item.replace_text;
-                    const newText = content;
+                    acquireLock(filepath);
+                    try {
+                        const raw = readFileSync(filepath, 'utf8');
+                        const { meta, body } = parseFrontmatter(raw);
+                        const oldText = item.replace_text;
+                        const newText = content;
 
-                    // Cek apakah old_text ada di body
-                    const occurrences = body.split(oldText).length - 1;
-                    if (occurrences === 0) {
+                        const occurrences = body.split(oldText).length - 1;
+                        if (occurrences === 0) {
+                            results.push({
+                                id: actualFilename, version: meta.version || 1, status: 'error',
+                                action: 'replace_text_not_found',
+                                error: `Text not found in runbook. Make sure replace_text matches exactly.`,
+                                preview: oldText.substring(0, 100)
+                            });
+                            continue;
+                        }
+                        if (occurrences > 1) {
+                            results.push({
+                                id: actualFilename, version: meta.version || 1, status: 'error',
+                                action: 'replace_text_ambiguous',
+                                error: `Text found ${occurrences} times — must be unique. Provide more context to make it unique.`,
+                                preview: oldText.substring(0, 100)
+                            });
+                            continue;
+                        }
+
+                        const newBody = body.replace(oldText, newText);
+
+                        const now = new Date().toISOString().split('T')[0];
+                        const changelogEntry = `- ${now} v${(meta.version || 1) + 1}: replace_text (${oldText.length} → ${newText.length} chars)`;
+                        const changelogHeader = '## _CHANGELOG';
+                        let finalBody = newBody;
+                        if (finalBody.includes(changelogHeader)) {
+                            finalBody = finalBody.replace(changelogHeader, `${changelogHeader}\n${changelogEntry}`);
+                        } else {
+                            finalBody = finalBody.trim() + `\n\n${changelogHeader}\n${changelogEntry}\n`;
+                        }
+
+                        const oldTags = Array.isArray(meta.tags) ? meta.tags : [];
+                        meta.tags = filterNoiseTags([...new Set([...oldTags, ...tags.map(t => t.toLowerCase())])]);
+                        meta.updated = new Date().toISOString();
+                        meta.version = (meta.version || 1) + 1;
+
+                        atomicWriteFileSync(filepath, buildFrontmatter(meta) + finalBody.trim() + '\n', 'utf8');
+                        invalidateGetCache(actualFilename);
+                        updateAllIndexes(actualFilename);
+                        updateActiveTarget(title, actualFilename);
+
+                        logger.info('TEXT REPLACED', { filename: actualFilename, old_len: oldText.length, new_len: newText.length });
+
                         results.push({
-                            id: actualFilename,
-                            version: meta.version || 1,
-                            status: 'error',
-                            action: 'replace_text_not_found',
-                            error: `Text not found in runbook. Make sure replace_text matches exactly.`,
-                            preview: oldText.substring(0, 100)
+                            id: actualFilename, version: meta.version, status: 'active',
+                            action: 'text_replaced', old_length: oldText.length,
+                            new_length: newText.length, filepath
                         });
                         continue;
+                    } finally {
+                        releaseLock(filepath);
                     }
-                    if (occurrences > 1) {
-                        results.push({
-                            id: actualFilename,
-                            version: meta.version || 1,
-                            status: 'error',
-                            action: 'replace_text_ambiguous',
-                            error: `Text found ${occurrences} times — must be unique. Provide more context to make it unique.`,
-                            preview: oldText.substring(0, 100)
-                        });
-                        continue;
-                    }
-
-                    // Replace exactly once
-                    const newBody = body.replace(oldText, newText);
-
-                    // Auto-append changelog
-                    const now = new Date().toISOString().split('T')[0];
-                    const changelogEntry = `- ${now} v${(meta.version || 1) + 1}: replace_text (${oldText.length} → ${newText.length} chars)`;
-                    const changelogHeader = '## _CHANGELOG';
-                    let finalBody = newBody;
-                    if (finalBody.includes(changelogHeader)) {
-                        finalBody = finalBody.replace(changelogHeader, `${changelogHeader}\n${changelogEntry}`);
-                    } else {
-                        finalBody = finalBody.trim() + `\n\n${changelogHeader}\n${changelogEntry}\n`;
-                    }
-
-                    // Update metadata
-                    const oldTags = Array.isArray(meta.tags) ? meta.tags : [];
-                    meta.tags = filterNoiseTags([...new Set([...oldTags, ...tags.map(t => t.toLowerCase())])]);
-                    meta.updated = new Date().toISOString();
-                    meta.version = (meta.version || 1) + 1;
-
-                    atomicWriteFileSync(filepath, buildFrontmatter(meta) + finalBody.trim() + '\n', 'utf8');
-
-                    invalidateGetCache(actualFilename);
-                    updateAllIndexes(actualFilename);
-                    updateActiveTarget(title, actualFilename);
-
-                    logger.info('TEXT REPLACED', { filename: actualFilename, old_len: oldText.length, new_len: newText.length });
-
-                    results.push({
-                        id: actualFilename,
-                        version: meta.version,
-                        status: 'active',
-                        action: 'text_replaced',
-                        old_length: oldText.length,
-                        new_length: newText.length,
-                        filepath
-                    });
-                    continue;
                 } catch (replaceErr) {
                     logger.error('Replace text error', { error: replaceErr.message, filename: actualFilename });
                 }
@@ -573,67 +569,60 @@ export async function execute(params) {
                     });
                     continue;
                 }
+                // v8.5: Full read→check→write wrapped in file lock to prevent multi-AI race condition
                 try {
-                    const raw = readFileSync(filepath, 'utf8');
-                    const { meta, body } = parseFrontmatter(raw);
-                    const sectionHeader = item.replace_section.startsWith('##') ? item.replace_section : `## ${item.replace_section}`;
-                    const escapedHeader = sectionHeader.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                    const headerRegex = new RegExp(`^${escapedHeader}`, 'im');
-                    const headerMatch = headerRegex.exec(body);
+                    acquireLock(filepath);
+                    try {
+                        const raw = readFileSync(filepath, 'utf8');
+                        const { meta, body } = parseFrontmatter(raw);
+                        const sectionHeader = item.replace_section.startsWith('##') ? item.replace_section : `## ${item.replace_section}`;
+                        const escapedHeader = sectionHeader.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                        const headerRegex = new RegExp(`^${escapedHeader}`, 'im');
+                        const headerMatch = headerRegex.exec(body);
 
-                    let newBody;
-                    if (headerMatch) {
-                        // Found section — use proper boundary detection
-                        const sectionStart = headerMatch.index;
-                        const sectionEnd = findSectionEnd(body, sectionStart);
-                        const oldSection = body.substring(sectionStart, sectionEnd);
+                        let newBody;
+                        if (headerMatch) {
+                            const sectionStart = headerMatch.index;
+                            const sectionEnd = findSectionEnd(body, sectionStart);
+                            const oldSection = body.substring(sectionStart, sectionEnd);
 
-                        // Replace: keep everything before + new section + everything after
-                        newBody = body.substring(0, sectionStart) + `${sectionHeader}\n${content}\n\n` + body.substring(sectionEnd);
-                        logger.info('SECTION REPLACED', { filename: actualFilename, section: item.replace_section, old_size: oldSection.length, new_size: content.length });
+                            newBody = body.substring(0, sectionStart) + `${sectionHeader}\n${content}\n\n` + body.substring(sectionEnd);
+                            logger.info('SECTION REPLACED', { filename: actualFilename, section: item.replace_section, old_size: oldSection.length, new_size: content.length });
 
-                        // Auto-append changelog entry (APPEND-ONLY — never replaced)
-                        const now = new Date().toISOString().split('T')[0];
-                        const changelogEntry = `- ${now} v${(meta.version || 1) + 1}: replaced ## ${item.replace_section} (${oldSection.length} → ${content.length} chars)`;
-                        const changelogHeader = '## _CHANGELOG';
-                        if (newBody.includes(changelogHeader)) {
-                            newBody = newBody.replace(changelogHeader, `${changelogHeader}\n${changelogEntry}`);
+                            const now = new Date().toISOString().split('T')[0];
+                            const changelogEntry = `- ${now} v${(meta.version || 1) + 1}: replaced ## ${item.replace_section} (${oldSection.length} → ${content.length} chars)`;
+                            const changelogHeader = '## _CHANGELOG';
+                            if (newBody.includes(changelogHeader)) {
+                                newBody = newBody.replace(changelogHeader, `${changelogHeader}\n${changelogEntry}`);
+                            } else {
+                                newBody = newBody.trim() + `\n\n${changelogHeader}\n${changelogEntry}\n`;
+                            }
                         } else {
-                            newBody = newBody.trim() + `\n\n${changelogHeader}\n${changelogEntry}\n`;
+                            newBody = body.trim() + `\n\n${sectionHeader}\n${content}\n`;
+                            logger.info('SECTION NOT FOUND, APPENDED', { filename: actualFilename, section: item.replace_section });
                         }
-                    } else {
-                        // Section not found → append
-                        newBody = body.trim() + `\n\n${sectionHeader}\n${content}\n`;
-                        logger.info('SECTION NOT FOUND, APPENDED', { filename: actualFilename, section: item.replace_section });
+
+                        const oldTags = Array.isArray(meta.tags) ? meta.tags : [];
+                        meta.tags = filterNoiseTags([...new Set([...oldTags, ...tags.map(t => t.toLowerCase())])]);
+                        meta.updated = new Date().toISOString();
+                        meta.version = (meta.version || 1) + 1;
+
+                        atomicWriteFileSync(filepath, buildFrontmatter(meta) + newBody.trim() + '\n', 'utf8');
+                        invalidateGetCache(actualFilename);
+                        updateAllIndexes(actualFilename);
+                        updateActiveTarget(title, actualFilename);
+
+                        results.push({
+                            id: actualFilename, version: meta.version, status: 'active',
+                            action: headerMatch ? 'section_replaced' : 'section_appended',
+                            section: item.replace_section, filepath
+                        });
+                        continue;
+                    } finally {
+                        releaseLock(filepath);
                     }
-
-                    // Merge tags (import filterNoiseTags from files.js)
-                    const oldTags = Array.isArray(meta.tags) ? meta.tags : [];
-                    meta.tags = filterNoiseTags([...new Set([...oldTags, ...tags.map(t => t.toLowerCase())])]);
-                    meta.updated = new Date().toISOString();
-                    meta.version = (meta.version || 1) + 1;
-
-                    atomicWriteFileSync(filepath, buildFrontmatter(meta) + newBody.trim() + '\n', 'utf8');
-
-                    // v7.0: Invalidate cache + update index after replace_section
-                    invalidateGetCache(actualFilename);
-                    updateAllIndexes(actualFilename);
-
-                    // Auto-update MEMORY.md active target
-                    updateActiveTarget(title, actualFilename);
-
-                    results.push({
-                        id: actualFilename,
-                        version: meta.version,
-                        status: 'active',
-                        action: headerMatch ? 'section_replaced' : 'section_appended',
-                        section: item.replace_section,
-                        filepath
-                    });
-                    continue;
                 } catch (replaceErr) {
                     logger.error('Replace section error', { error: replaceErr.message, filename: actualFilename });
-                    // Fall through to normal append
                 }
             }
 

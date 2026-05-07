@@ -12,30 +12,48 @@ import { join, basename } from 'path';
  * Uses .lock file with 5-second timeout (research: race condition in MCP concurrent writes)
  * Non-blocking: if lock held >5s, force-acquire (stale lock from crash)
  */
+const lockDepth = new Map();
+
 function acquireLock(filepath) {
     const lockPath = filepath + '.lock';
     const maxWaitMs = 5000;
     const start = Date.now();
+    const depth = lockDepth.get(filepath) || 0;
+    if (depth > 0) {
+        lockDepth.set(filepath, depth + 1);
+        return;
+    }
     while (existsSync(lockPath)) {
+        try {
+            const lockPid = readFileSync(lockPath, 'utf8').trim();
+            if (lockPid === String(process.pid)) {
+                lockDepth.set(filepath, 1);
+                return;
+            }
+        } catch {}
         const lockAge = Date.now() - statSync(lockPath).mtimeMs;
         if (lockAge > maxWaitMs) {
-            // Stale lock from crashed process — force remove
             try { unlinkSync(lockPath); } catch {}
             break;
         }
         if (Date.now() - start > maxWaitMs) {
-            // Timeout waiting — force acquire
             try { unlinkSync(lockPath); } catch {}
             break;
         }
-        // Busy-wait 10ms
         const until = Date.now() + 10;
         while (Date.now() < until) { /* spin */ }
     }
     writeFileSync(lockPath, String(process.pid), 'utf8');
+    lockDepth.set(filepath, 1);
 }
 
 function releaseLock(filepath) {
+    const depth = lockDepth.get(filepath) || 0;
+    if (depth > 1) {
+        lockDepth.set(filepath, depth - 1);
+        return;
+    }
+    lockDepth.delete(filepath);
     const lockPath = filepath + '.lock';
     try { unlinkSync(lockPath); } catch {}
 }
@@ -277,10 +295,31 @@ export function appendToSection(body, sectionName, newContent) {
     const sectionHeader = sectionName.startsWith('## ') ? sectionName : `## ${sectionName}`;
     const escapedHeader = sectionHeader.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const headerRegex = new RegExp(`^${escapedHeader}`, 'im');
+
+    // FILE-WIDE exact match FIRST — before section existence check
+    // Catches cross-section duplicates even when target section doesn't exist yet
+    if (body.includes(newContent.trim())) {
+        return { body, action: 'skipped_duplicate' };
+    }
+
+    // FILE-WIDE near-duplicate check for multi-line content — before section existence
+    const preLines = newContent.trim().split('\n').map(l => l.trim()).filter(l => l.length > 10);
+    if (preLines.length >= 2) {
+        const bodyLower = body.toLowerCase();
+        const preMatched = preLines.filter(l => {
+            const lineLower = l.toLowerCase();
+            if (bodyLower.includes(lineLower)) return true;
+            const core = lineLower.replace(/[\)\]\}\.\,\;\:]+$/, '').replace(/^[\-\*\#\s]+/, '').trim();
+            return core.length >= 25 && bodyLower.includes(core);
+        });
+        if (preMatched.length / preLines.length >= 0.6) {
+            return { body, action: 'skipped_near_duplicate', match_ratio: Math.round((preMatched.length / preLines.length) * 100) };
+        }
+    }
+
     const match = headerRegex.exec(body);
 
     if (!match) {
-        // Section not found — create at end (with provenance stamp)
         let createContent = newContent.trim();
         const hasDate = /^\d{4}-\d{2}-\d{2}|^### \d{4}|^- \d{4}|^\[\d{4}/.test(createContent);
         if (!hasDate && createContent.length > 20) {
@@ -297,26 +336,29 @@ export function appendToSection(body, sectionName, newContent) {
     const sectionEnd = findSectionEnd(body, sectionStart);
     const existingSection = body.substring(sectionStart, sectionEnd);
 
-    // Anti-duplicate: EXACT match — skip if content already in section
+    // Section-level exact match
     if (existingSection.includes(newContent.trim())) {
         return { body, action: 'skipped_duplicate' };
     }
 
-    // Anti-duplicate: NEAR-DUPLICATE — skip if >80% of lines already exist
-    // Uses core-fragment matching: strip markdown/punctuation, match leading 30+ chars
+    // Anti-duplicate: NEAR-DUPLICATE — skip if >60% of lines already exist (lowered from 80%)
+    // Uses core-fragment matching: strip markdown/punctuation, match leading 25+ chars
     const newLines = newContent.trim().split('\n').map(l => l.trim()).filter(l => l.length > 10);
     if (newLines.length >= 2) {
         const existingLower = existingSection.toLowerCase();
+        const bodyLower = body.toLowerCase(); // file-wide check
         const matchedLines = newLines.filter(l => {
             const lineLower = l.toLowerCase();
-            // Exact substring match
+            // Exact substring match (section-level)
             if (existingLower.includes(lineLower)) return true;
-            // Core-fragment match: strip trailing punc, match leading 30+ chars
-            const core = lineLower.replace(/[\)\]\}\.\,\;]+$/, '').trim();
-            return core.length >= 30 && existingLower.includes(core);
+            // Exact substring match (file-wide — catches cross-section duplicates)
+            if (bodyLower.includes(lineLower)) return true;
+            // Core-fragment match: strip trailing punc, match leading 25+ chars (was 30)
+            const core = lineLower.replace(/[\)\]\}\.\,\;\:]+$/, '').replace(/^[\-\*\#\s]+/, '').trim();
+            return core.length >= 25 && (existingLower.includes(core) || bodyLower.includes(core));
         });
         const matchRatio = matchedLines.length / newLines.length;
-        if (matchRatio >= 0.8) {
+        if (matchRatio >= 0.6) { // lowered from 0.8 — catches reformulated content
             return { body, action: 'skipped_near_duplicate', match_ratio: Math.round(matchRatio * 100) };
         }
     }

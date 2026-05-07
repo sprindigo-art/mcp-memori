@@ -160,7 +160,7 @@ async function main() {
             context_len: context.length,
             has_live_status: !!liveStatus,
             has_re_entry: !!reEntry,
-            autolog_entries: autoLogTail ? autoLogTail.split('\n').length : 0
+            autolog_entries: autoLogSafe ? autoLogSafe.split('\n').length : 0
         });
     } catch (err) {
         hookLog('ERROR', 'SessionStart exception', { error: err?.message });

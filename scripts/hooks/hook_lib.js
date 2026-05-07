@@ -98,14 +98,21 @@ export function extractTargetFromToolCall(toolName, toolInput) {
     const name = toolName.toLowerCase();
     if (name.includes('memory_get')) {
         const id = toolInput.id || '';
-        if (id.startsWith('RUNBOOK_') && id.endsWith('.md') && !id.includes('UNIFIED'))
-            return id.replace(/^RUNBOOK_/, '').replace(/\.md$/, '');
+        if (id.startsWith('RUNBOOK_') && id.endsWith('.md') && !id.includes('UNIFIED')) {
+            const t = id.replace(/^RUNBOOK_/, '').replace(/\.md$/, '');
+            if (/^_?TEST|^_AUTO_LOG/i.test(t)) return null;
+            return t;
+        }
     }
     if (name.includes('memory_upsert')) {
         const items = toolInput.items;
         if (Array.isArray(items) && items.length > 0) {
             const m = (items[0].title || '').match(/^\[RUNBOOK\]\s*(.+)$/i);
-            if (m && m[1]) return m[1].trim();
+            if (m && m[1]) {
+                const t = m[1].trim();
+                if (/^_?TEST|^_AUTO_LOG/i.test(t)) return null;
+                return t;
+            }
         }
     }
     return null;
