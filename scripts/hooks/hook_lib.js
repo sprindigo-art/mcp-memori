@@ -142,7 +142,7 @@ export function resolveActiveTarget(sessionId = null) {
     // Strategy 2: most-recent RUNBOOK_*.md (global fallback)
     try {
         const files = readdirSync(RUNBOOKS_DIR)
-            .filter(f => f.startsWith('RUNBOOK_') && f.endsWith('.md') && !f.includes('_AUTO_LOG_UNIFIED'))
+            .filter(f => f.startsWith('RUNBOOK_') && f.endsWith('.md') && !f.includes('_AUTO_LOG_UNIFIED') && !/RUNBOOK__?TEST/i.test(f))
             .map(f => ({
                 file: f,
                 mtime: statSync(join(RUNBOOKS_DIR, f)).mtimeMs
