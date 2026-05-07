@@ -74,9 +74,15 @@ async function main() {
                     const live = extractSection('LIVE STATUS');
                     const reentry = extractSection('RE-ENTRY CHECKLIST');
                     const creds = extractSection('CREDENTIAL');
-                    if (live) liveContext += `\n[ACTIVE STATE]\n${live}\n`;
-                    if (reentry) liveContext += `\n[ACCESS METHODS]\n${reentry}\n`;
-                    if (creds) liveContext += `\n[CREDENTIALS — MUST preserve ALL]\n${creds.substring(0, 400)}\n`;
+                    const redact = (t) => t
+                        .replace(/password[:\s=]*['"]?\S+['"]?/gi, 'password:[SAVED_IN_RUNBOOK]')
+                        .replace(/sshpass\s+-p\s+['"]?\S+['"]?/gi, 'sshpass -p [SAVED_IN_RUNBOOK]')
+                        .replace(/token[:\s=]*\S{20,}/gi, 'token:[SAVED_IN_RUNBOOK]')
+                        .replace(/Bearer\s+\S{20,}/gi, 'Bearer [SAVED_IN_RUNBOOK]')
+                        .replace(/-p\s+['"][^'"]{4,}['"]/g, '-p [SAVED_IN_RUNBOOK]');
+                    if (live) liveContext += `\n[ACTIVE STATE]\n${redact(live)}\n`;
+                    if (reentry) liveContext += `\n[ACCESS METHODS]\n${redact(reentry)}\n`;
+                    if (creds) liveContext += `\n[CREDENTIALS]\n${redact(creds.substring(0, 400))}\n`;
                 } catch (e) {
                     hookLog('WARN', 'PreCompact runbook read failed', { error: e?.message });
                 }
