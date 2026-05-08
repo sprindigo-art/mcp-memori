@@ -44,14 +44,10 @@ function hasTargetSignal(prompt) {
     if (/cve-\d{4}-\d+/i.test(lower)) return true;
     // Specific technique/tool keywords (not generic)
     const techSignals = [
-        'webshell', 'reverse shell', 'privesc', 'rce ', 'sqli', 'xss',
-        'credential', 'ssh ', 'tunnel', 'proxmox', 'oracle', 'fpx',
-        'payment', 'checkout', 'exploit', 'duitnow', 'hackerone',
-        'bugbounty', 'bug bounty', 'runbook', 'target',
-        'akses', 'login', 'password', 'vcenter', 'nutanix', 'zimbra',
-        'cpanel', 'cloudflare', 'persistence', 'tier 70', 'ssl',
-        'certbot', 'database', 'mysql', 'billing', 'clone',
-        'memori', 'search', 'teknik'
+        'proxmox', 'oracle', 'fpx', 'duitnow', 'hackerone',
+        'bugbounty', 'bug bounty', 'runbook',
+        'vcenter', 'nutanix', 'zimbra', 'cpanel', 'cloudflare',
+        'tier 70', 'tier 81', 'tier 86'
     ];
     if (techSignals.some(sig => lower.includes(sig))) return true;
     return false;
@@ -101,12 +97,18 @@ async function main() {
             process.exit(0);
         }
 
+        const sanitizeSnippet = (text) => text
+            .replace(/password[:\s=]*['"]?\S+['"]?/gi, 'password:[REDACTED]')
+            .replace(/sshpass\s+-p\s+['"]?\S+['"]?/gi, 'sshpass -p [REDACTED]')
+            .replace(/token[:\s=]*\S{20,}/gi, 'token:[REDACTED]')
+            .replace(/-p\s+['"][^'"]{4,}['"]/g, '-p [REDACTED]');
+
         const parts = ['# Memory Context (auto-injected)'];
         let totalChars = parts[0].length;
 
         for (const r of relevant) {
             const title = r.title || r.id;
-            const snippet = (r.snippet || '').substring(0, 300).replace(/\n/g, ' ').trim();
+            const snippet = sanitizeSnippet((r.snippet || '').substring(0, 300).replace(/\n/g, ' ').trim());
             const entry = `- **${title}** (v${r.version || 1}, ${r.content_length || 0} chars): ${snippet}`;
 
             if (totalChars + entry.length > MAX_CONTEXT_CHARS) break;
