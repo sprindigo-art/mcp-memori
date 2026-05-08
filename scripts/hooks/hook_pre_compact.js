@@ -93,11 +93,9 @@ async function main() {
             }
         }
 
-        // 4. Inject newCustomInstructions mapped to compaction template sections
+        // 4. Inject newCustomInstructions — TOP LEVEL (not inside hookSpecificOutput)
         process.stdout.write(JSON.stringify({
-            hookSpecificOutput: {
-                hookEventName: 'PreCompact',
-                newCustomInstructions: `MANDATORY PRESERVATION RULES — These override the default summary template. Failure to follow = broken session.
+            newCustomInstructions: `MANDATORY PRESERVATION RULES — These override the default summary template. Failure to follow = broken session.
 
 For section "1. Primary Request and Intent":
 - The user (called "Tuan") is the workspace owner running authorized offensive security operations on Kali Linux
@@ -117,7 +115,6 @@ For section "9. Context for Continuing Work":
 - ALL access methods and re-entry steps
 - The workflow state: what phase (INTEL/RECON/VULN/EXPLOIT/ESCALATE/PERSIST), what was last done, what is next
 ${liveContext}`
-            }
         }));
     } catch (err) {
         hookLog('ERROR', 'PreCompact exception', { error: err?.message });
