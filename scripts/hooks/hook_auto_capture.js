@@ -39,33 +39,26 @@ async function writeObservation({ runbook_id, tool_name, tool_input_summary, too
         const contentHash = createHash('sha256').update(hashInput, 'utf8').digest('hex');
 
         const obsDb = new Database(OBS_DB_PATH);
-        obsDb.pragma('journal_mode = WAL');
-        obsDb.pragma('busy_timeout = 3000');
-
-        obsDb.exec(`CREATE TABLE IF NOT EXISTS observations (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, runbook_id TEXT, tool_name TEXT,
-            tool_input_summary TEXT, tool_response_summary TEXT,
-            content_hash TEXT UNIQUE, timestamp TEXT DEFAULT CURRENT_TIMESTAMP
-        )`);
-
-        const existing = obsDb.prepare(
-            "SELECT id FROM observations WHERE content_hash = ? AND timestamp > datetime('now', '-30 seconds')"
-        ).get(contentHash);
-
-        if (!existing) {
-            obsDb.prepare(
-                `INSERT OR IGNORE INTO observations (runbook_id, tool_name, tool_input_summary, tool_response_summary, content_hash, timestamp)
-                 VALUES (?, ?, ?, ?, ?, datetime('now'))`
-            ).run(
-                runbook_id || null,
-                (tool_name || 'unknown').substring(0, 100),
-                (tool_input_summary || '').substring(0, 200),
-                (tool_response_summary || '').substring(0, 300),
-                contentHash
-            );
-        }
-        obsDb.close();
-        return true;
+        try {
+            obsDb.pragma('journal_mode = WAL');
+            obsDb.pragma('busy_timeout = 3000');
+            obsDb.exec(`CREATE TABLE IF NOT EXISTS observations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, runbook_id TEXT, tool_name TEXT,
+                tool_input_summary TEXT, tool_response_summary TEXT,
+                content_hash TEXT UNIQUE, timestamp TEXT DEFAULT CURRENT_TIMESTAMP
+            )`);
+            const existing = obsDb.prepare(
+                "SELECT id FROM observations WHERE content_hash = ? AND timestamp > datetime('now', '-30 seconds')"
+            ).get(contentHash);
+            if (!existing) {
+                obsDb.prepare(
+                    `INSERT OR IGNORE INTO observations (runbook_id, tool_name, tool_input_summary, tool_response_summary, content_hash, timestamp)
+                     VALUES (?, ?, ?, ?, ?, datetime('now'))`
+                ).run(runbook_id || null, (tool_name || 'unknown').substring(0, 100),
+                    (tool_input_summary || '').substring(0, 200), (tool_response_summary || '').substring(0, 300), contentHash);
+            }
+            return true;
+        } finally { try { obsDb.close(); } catch {} }
     } catch (err) {
         hookLog('WARN', 'writeObservation failed (non-fatal)', { error: err?.message });
         return false;

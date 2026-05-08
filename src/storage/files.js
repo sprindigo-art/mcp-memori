@@ -4,7 +4,7 @@
  * v7.0: Query expansion, fuzzy title matching, better scoring, recency decay
  * @module storage/files
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, unlinkSync, statSync, renameSync, copyFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync, unlinkSync, statSync, renameSync, copyFileSync, openSync, closeSync } from 'fs';
 import { join, basename } from 'path';
 
 /**
@@ -23,28 +23,29 @@ function acquireLock(filepath) {
         lockDepth.set(filepath, depth + 1);
         return;
     }
-    while (existsSync(lockPath)) {
+    while (true) {
+        try {
+            const fd = openSync(lockPath, 'wx');
+            writeFileSync(fd, String(process.pid));
+            closeSync(fd);
+            lockDepth.set(filepath, 1);
+            return;
+        } catch (e) {
+            if (e.code !== 'EEXIST') { lockDepth.set(filepath, 1); return; }
+        }
         try {
             const lockPid = readFileSync(lockPath, 'utf8').trim();
-            if (lockPid === String(process.pid)) {
-                lockDepth.set(filepath, 1);
-                return;
-            }
+            if (lockPid === String(process.pid)) { lockDepth.set(filepath, 1); return; }
         } catch {}
         let lockAge = maxWaitMs + 1;
         try { lockAge = Date.now() - statSync(lockPath).mtimeMs; } catch { break; }
-        if (lockAge > maxWaitMs) {
+        if (lockAge > maxWaitMs || Date.now() - start > maxWaitMs) {
             try { unlinkSync(lockPath); } catch {}
-            break;
-        }
-        if (Date.now() - start > maxWaitMs) {
-            try { unlinkSync(lockPath); } catch {}
-            break;
+            continue;
         }
         const until = Date.now() + 10;
         while (Date.now() < until) { /* spin */ }
     }
-    writeFileSync(lockPath, String(process.pid), 'utf8');
     lockDepth.set(filepath, 1);
 }
 
@@ -573,28 +574,26 @@ export function saveRunbook(title, content, tags = [], options = {}) {
 
     if (existsSync(filepath)) {
         // === APPEND MODE: Read existing, append new, preserve ALL old content ===
+        acquireLock(filepath);
+        try {
         const existing = readFileSync(filepath, 'utf8');
         const { meta, body } = parseFrontmatter(existing);
         const existingBody = body.trim();
 
-        // Check duplicate: skip if new content already exists in runbook
         if (existingBody.includes(newContent)) {
             logger.info('RUNBOOK APPEND: Content already exists, skipping', { filename, title });
             return { id: filename, action: 'skipped_duplicate', filepath, version: meta.version || 1 };
         }
 
-        // Merge tags (preserve old + add new, filter noise)
         const oldTags = Array.isArray(meta.tags) ? meta.tags : [];
         const mergedTags = filterNoiseTags([...new Set([...oldTags, ...tags.map(t => t.toLowerCase())])]);
 
-        // Update metadata
         meta.tags = mergedTags;
         meta.updated = now;
         meta.version = (meta.version || 1) + 1;
         if (options.success !== undefined) meta.success = options.success;
         if (options.verified !== undefined) meta.verified = options.verified;
 
-        // APPEND new content (preserve ALL existing)
         const newBody = existingBody + '\n\n' + newContent;
         const newFile = buildFrontmatter(meta) + newBody + '\n';
 
@@ -607,6 +606,7 @@ export function saveRunbook(title, content, tags = [], options = {}) {
         });
 
         return { id: filename, action: 'appended', filepath, version: meta.version };
+        } finally { releaseLock(filepath); }
     } else {
         // === CREATE new runbook ===
         const meta = {

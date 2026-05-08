@@ -140,8 +140,9 @@ export async function execute(params) {
                 if (!body.includes(removeText)) {
                     return { ok: false, message: 'Teks tidak ditemukan di runbook. Pastikan exact match.', meta: { trace_id: traceId } };
                 }
-                newBody = body.replace(removeText, '');
-                removedChars = removeText.length;
+                const occurrences = body.split(removeText).length - 1;
+                newBody = body.replaceAll(removeText, '');
+                removedChars = removeText.length * occurrences;
             }
 
             if (removeSection) {

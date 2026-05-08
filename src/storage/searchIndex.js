@@ -385,6 +385,10 @@ export function getDb() {
     return db;
 }
 
+export function closeSearchIndex() {
+    if (db) { try { db.pragma('wal_checkpoint(TRUNCATE)'); db.close(); } catch {} db = null; indexReady = false; }
+}
+
 export default {
     initSearchIndex,
     updateIndexEntry,
@@ -394,5 +398,6 @@ export default {
     ftsSearch,
     isIndexReady,
     getIndexStats,
-    getDb
+    getDb,
+    closeSearchIndex
 };

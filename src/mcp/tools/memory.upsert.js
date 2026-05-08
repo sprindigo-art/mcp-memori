@@ -477,6 +477,7 @@ export async function execute(params) {
                     }
                 } catch (appendErr) {
                     logger.error('Append to section error', { error: appendErr.message, filename: actualFilename });
+                    results.push({ id: actualFilename, status: 'error', action: 'append_error', error: appendErr.message, filepath });
                     continue;
                 }
             }
@@ -547,6 +548,7 @@ export async function execute(params) {
                     }
                 } catch (replaceErr) {
                     logger.error('Replace text error', { error: replaceErr.message, filename: actualFilename });
+                    results.push({ id: actualFilename, status: 'error', action: 'replace_text_error', error: replaceErr.message, filepath });
                     continue;
                 }
             }
@@ -625,6 +627,7 @@ export async function execute(params) {
                     }
                 } catch (replaceErr) {
                     logger.error('Replace section error', { error: replaceErr.message, filename: actualFilename });
+                    results.push({ id: actualFilename, status: 'error', action: 'replace_section_error', error: replaceErr.message, filepath });
                     continue;
                 }
             }

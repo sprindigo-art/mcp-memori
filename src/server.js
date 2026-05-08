@@ -7,7 +7,7 @@ import { createInterface } from 'readline';
 import { initDb, closeDb, getDbType } from './db/index.js';
 import { getToolDefinitions, executeTool, hasTool } from './mcp/index.js';
 import { getEmbeddingMode } from './utils/embedding.js';
-import { initSearchIndex } from './storage/searchIndex.js';
+import { initSearchIndex, closeSearchIndex } from './storage/searchIndex.js';
 import { rebuildVectorIndex } from './storage/vectorIndex.js';
 import logger from './utils/logger.js';
 
@@ -35,6 +35,7 @@ class McpServer {
         // Handle termination signals
         const cleanup = async (signal) => {
             logger.info(`Received ${signal}, shutting down...`);
+            closeSearchIndex();
             await closeDb();
             process.exit(0);
         };
