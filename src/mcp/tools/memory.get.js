@@ -119,6 +119,7 @@ export const definition = {
             offset: { type: 'number', description: 'Character offset to start reading from (default: 0)' },
             limit: { type: 'number', description: 'Max characters to return (default: 80000)' },
             section: { type: 'string', description: 'Read specific ## section by name (e.g. "CREDENTIAL", "EXPLOIT", "GAGAL"). Case-insensitive.' },
+            search: { type: 'string', description: 'Filter ### entries containing this text. Use with section param to find specific entry in large section (e.g. search:"10.1.178.5" in section:"CREDENTIAL"). Returns only matching entries, not entire section.' },
             sections_list: { type: 'boolean', description: 'If true, return list of all major sections with their char positions instead of content. Useful for navigating large runbooks.' },
             line: { type: 'number', description: 'Start reading from this line number (1-based). Overrides offset.' },
             line_count: { type: 'number', description: 'Number of lines to read (default: 200). Used with line parameter.' }
@@ -128,7 +129,7 @@ export const definition = {
 };
 
 export async function execute(params) {
-    const { id, offset = 0, limit = MAX_OUTPUT_CHARS, section, sections_list, line, line_count = 200 } = params;
+    const { id, offset = 0, limit = MAX_OUTPUT_CHARS, section, sections_list, search, line, line_count = 200 } = params;
 
     try {
         // v7.0: Check LRU cache first (skip for section/pagination requests that need fresh data)
@@ -255,6 +256,24 @@ export async function execute(params) {
             }
 
             let result = matched.join('\n\n---\n\n');
+
+            // SEARCH FILTER: if search param provided, filter to matching ### entries only
+            if (search && search.trim()) {
+                const searchLower = search.trim().toLowerCase();
+                const entries = result.split(/(?=^### )/m);
+                const searchMatched = entries.filter(entry => entry.toLowerCase().includes(searchLower));
+                if (searchMatched.length === 0) {
+                    confirmRead(item.id, 'section', result.length);
+                    return {
+                        __plaintext: true,
+                        text: `# ${item.title} — Section: ${section} | search: "${search}"\n\nNo ### entries containing "${search}" found in this section (${entries.length} entries checked, ${result.length} chars total).\n\nTip: try memory_search({query:"${search}", scope_id:"${item.id}"}) for fuzzy search.`
+                    };
+                }
+                // Rebuild result with only matching entries + section header
+                const sectionHeader = result.match(/^## [^\n]+/)?.[0] || `## ${section}`;
+                result = sectionHeader + '\n' + searchMatched.join('\n');
+            }
+
             const totalResultChars = result.length;
             const effectiveLimit = Math.min(limit, MAX_OUTPUT_CHARS);
 
@@ -274,7 +293,8 @@ export async function execute(params) {
             // Section read = unlock partial (track chars read)
             confirmRead(item.id, 'section', totalResultChars);
 
-            const header = `# ${item.title} — Section: ${section} (${matched.length} match${matched.length > 1 ? 'es' : ''}, ${totalResultChars} chars total)` +
+            const searchInfo = search ? ` | search: "${search}"` : '';
+            const header = `# ${item.title} — Section: ${section}${searchInfo} (${matched.length} match${matched.length > 1 ? 'es' : ''}, ${totalResultChars} chars total)` +
                 (matchedNames.length > 1 ? `\n> Matched: ${matchedNames.slice(0, 20).join(', ')}${matchedNames.length > 20 ? ` ... +${matchedNames.length - 20} more` : ''}` : '');
 
             return {
