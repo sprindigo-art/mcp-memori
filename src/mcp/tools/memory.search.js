@@ -7,7 +7,7 @@ import { searchRunbooks, readRunbook, RUNBOOKS_DIR } from '../../storage/files.j
 import filesModule from '../../storage/files.js';
 const { expandQueryWords } = filesModule;
 import { vectorSearchRunbooks, isVectorReady } from '../../storage/vectorIndex.js';
-import { queryGraph, findRelatedEntities, getEntityStats } from '../../storage/graphIndex.js';
+import { queryGraph, findRelatedEntities, findRelatedByRunbook, getEntityStats } from '../../storage/graphIndex.js';
 import { v4 as uuidv4 } from 'uuid';
 import logger from '../../utils/logger.js';
 
@@ -397,7 +397,7 @@ export async function execute(params) {
         // v7.5: Graph enrichment — add related entities to results
         for (const item of reranked) {
             try {
-                const related = findRelatedEntities(item.id, 5);
+                const related = findRelatedByRunbook(item.id, 5);
                 if (related.length > 0) {
                     item.related_entities = related.map(r => r.name).slice(0, 5);
                 }

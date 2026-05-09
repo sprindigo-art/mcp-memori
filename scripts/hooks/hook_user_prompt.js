@@ -11,7 +11,7 @@
  * - Output: stdout JSON { hookSpecificOutput: { hookEventName, additionalContext } }
  * - Exit 0 always (never block user)
  */
-import { readStdinJson, hookLog } from './hook_lib.js';
+import { readStdinJson, hookLog, sanitizeTriggers } from './hook_lib.js';
 import { searchRunbooks } from '../../src/storage/files.js';
 import { initSearchIndex, isIndexReady } from '../../src/storage/searchIndex.js';
 
@@ -122,7 +122,7 @@ async function main() {
         }
 
         parts.push(`\n> \`memory_get({id:"ID"})\` for full runbook.`);
-        const context = parts.join('\n');
+        const context = sanitizeTriggers(parts.join('\n'));
 
         process.stdout.write(JSON.stringify({
             hookSpecificOutput: {

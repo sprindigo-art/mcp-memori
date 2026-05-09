@@ -9,6 +9,8 @@ import { join } from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { invalidateGetCache } from './memory.get.js';
 import { removeIndexEntry, updateIndexEntry } from '../../storage/searchIndex.js';
+import { updateVectorEntry, removeVectorEntry } from '../../storage/vectorIndex.js';
+import { updateGraphEntry, removeGraphEntry } from '../../storage/graphIndex.js';
 import logger from '../../utils/logger.js';
 
 // Track runbook yang sudah dibaca via memory_get
@@ -168,6 +170,8 @@ export async function execute(params) {
             atomicWriteFileSync(filepath, buildFrontmatter(meta) + newBody + '\n', 'utf8');
             invalidateGetCache(id);
             try { updateIndexEntry(id); } catch {}
+            try { updateVectorEntry(id).catch(() => {}); } catch {}
+            try { updateGraphEntry(id); } catch {}
             logger.info('PARTIAL DELETE after read confirmation', { id, removed_chars: removedChars, reason });
 
             return {
@@ -186,6 +190,8 @@ export async function execute(params) {
             readConfirmations.delete(id);
             invalidateGetCache(id);
             try { removeIndexEntry(id); } catch {}
+            try { removeVectorEntry(id); } catch {}
+            try { removeGraphEntry(id); } catch {}
         }
 
         return {

@@ -208,10 +208,13 @@ export function updateGraphEntry(filename) {
             insertLink.run(filename, entityName, relation);
         }
 
-        // Recount all entities
+        // Recount entities — preserve classified type from kg_entities if exists
         db.exec(`
             INSERT OR REPLACE INTO kg_entities (name, type, count)
-            SELECT entity_name, 'tag', COUNT(*) FROM kg_links GROUP BY entity_name
+            SELECT kl.entity_name,
+                   COALESCE((SELECT ke.type FROM kg_entities ke WHERE ke.name = kl.entity_name AND ke.type != 'tag'), 'tag'),
+                   COUNT(*)
+            FROM kg_links kl GROUP BY kl.entity_name
         `);
     } catch (err) {
         logger.warn('Graph entry update failed (non-fatal)', { filename, error: err.message });
@@ -269,6 +272,27 @@ export function findRelatedEntities(entityName, limit = 20) {
             ORDER BY shared_runbooks DESC
             LIMIT ?
         `).all(lower, lower, limit);
+    } catch { return []; }
+}
+
+/**
+ * Find related entities for a runbook by its runbook_id (filename).
+ * runbook → its entities → other runbooks' entities
+ */
+export function findRelatedByRunbook(runbookId, limit = 20) {
+    if (!db) return [];
+    try {
+        return db.prepare(`
+            SELECT kl2.entity_name as name, ke.type, COUNT(DISTINCT kl2.runbook_id) as shared_runbooks
+            FROM kg_links kl1
+            JOIN kg_links kl2 ON kl1.entity_name = kl2.entity_name
+            LEFT JOIN kg_entities ke ON kl2.entity_name = ke.name
+            WHERE kl1.runbook_id = ?
+            AND kl2.runbook_id != ?
+            GROUP BY kl2.entity_name
+            ORDER BY shared_runbooks DESC
+            LIMIT ?
+        `).all(runbookId, runbookId, limit);
     } catch { return []; }
 }
 

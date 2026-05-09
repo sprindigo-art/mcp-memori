@@ -19,7 +19,7 @@ import { fileURLToPath } from 'url';
 import { readStdinJson, hookLog, resolveActiveTarget, clearSessionTarget } from './hook_lib.js';
 import {
     RUNBOOKS_DIR, titleToFilename, findByTitle, findByFuzzyTitle,
-    parseFrontmatter, findSectionEnd
+    parseFrontmatter, findSectionEnd, acquireLock, releaseLock
 } from '../../src/storage/files.js';
 
 const LOOKBACK_HOURS = 4;
@@ -45,7 +45,9 @@ function rotateSessionLog(existingLog, runbookFilename) {
         hookLog('WARN', 'SessionLog archive failed', { error: err?.message });
     }
     const marker = `[${new Date().toISOString().split('T')[0]}] SESSION LOG rotated, ${archive.length} older sessions archived\n\n`;
-    return { log: header + marker + keep.join(''), rotated: true };
+    // Strip old rotation markers from header to prevent accumulation
+    const cleanHeader = header.replace(/\[[\d-]+\] SESSION LOG rotated.*\n\n?/g, '');
+    return { log: cleanHeader + marker + keep.join(''), rotated: true };
 }
 
 function findRunbookPath(target) {
@@ -178,54 +180,63 @@ async function main() {
     }
 
     try {
-        const raw = readFileSync(filepath, 'utf8');
-        const { meta, body } = parseFrontmatter(raw);
-        const autolog = extractSection(body, '## _AUTO_LOG');
+        // Lock BEFORE read to prevent TOCTOU (PostToolUse can modify between read and write)
+        acquireLock(filepath);
+        try {
+            const raw = readFileSync(filepath, 'utf8');
+            const { meta, body } = parseFrontmatter(raw);
+            const autolog = extractSection(body, '## _AUTO_LOG');
 
-        if (!autolog.content) {
-            hookLog('INFO', 'Stop: no _AUTO_LOG section', { target });
-            process.exit(0);
-        }
-
-        const sinceMs = Date.now() - LOOKBACK_HOURS * 60 * 60 * 1000;
-        const entries = parseAutologEntries(autolog.content, sinceMs);
-
-        if (entries.length < 3) {
-            hookLog('INFO', 'Stop: too few entries for summary', { target, entries: entries.length });
-            process.exit(0);
-        }
-
-        // v8.0: Template-based summary (zero AI, zero network)
-        const summary = buildTemplateSummary(entries);
-        const sessionLogHeader = '## SESSION LOG';
-        let newBody;
-
-        if (body.includes(sessionLogHeader)) {
-            const slIdx = body.indexOf(sessionLogHeader);
-            const slEnd = findSectionEnd(body, slIdx);
-            let existingLog = body.substring(slIdx, slEnd);
-            // v8.4: Rotate SESSION LOG if >50KB (archive old sessions, keep last 10)
-            if (existingLog.length > SESSION_LOG_MAX_SIZE) {
-                const fn = filepath ? filepath.split('/').pop() : target;
-                const { log: rotatedLog } = rotateSessionLog(existingLog, fn);
-                existingLog = rotatedLog;
+            if (!autolog.content) {
+                hookLog('INFO', 'Stop: no _AUTO_LOG section', { target });
+                releaseLock(filepath);
+                process.exit(0);
             }
-            newBody = body.substring(0, slIdx) + existingLog.trimEnd() + '\n\n' + summary + '\n\n' + body.substring(slEnd);
-        } else {
-            const autoLogIdx = body.indexOf('## _AUTO_LOG');
-            if (autoLogIdx > 0) {
-                newBody = body.substring(0, autoLogIdx).trimEnd() + '\n\n' + sessionLogHeader + '\n' + summary + '\n\n' + body.substring(autoLogIdx);
+
+            const sinceMs = Date.now() - LOOKBACK_HOURS * 60 * 60 * 1000;
+            const entries = parseAutologEntries(autolog.content, sinceMs);
+
+            if (entries.length < 3) {
+                hookLog('INFO', 'Stop: too few entries for summary', { target, entries: entries.length });
+                releaseLock(filepath);
+                process.exit(0);
+            }
+
+            const summary = buildTemplateSummary(entries);
+            const sessionLogHeader = '## SESSION LOG';
+            let newBody;
+
+            if (body.includes(sessionLogHeader)) {
+                const slIdx = body.indexOf(sessionLogHeader);
+                const slEnd = findSectionEnd(body, slIdx);
+                let existingLog = body.substring(slIdx, slEnd);
+                if (existingLog.length > SESSION_LOG_MAX_SIZE) {
+                    const fn = filepath ? filepath.split('/').pop() : target;
+                    const { log: rotatedLog } = rotateSessionLog(existingLog, fn);
+                    existingLog = rotatedLog;
+                }
+                // Strip accumulated rotation markers (keep none — new rotation adds fresh one)
+                existingLog = existingLog.replace(/\[[\d-]+\] SESSION LOG rotated[^\n]*\n\n?/g, '');
+                newBody = body.substring(0, slIdx) + existingLog.trimEnd() + '\n\n' + summary + '\n\n' + body.substring(slEnd);
             } else {
-                newBody = body.trimEnd() + '\n\n' + sessionLogHeader + '\n' + summary + '\n';
+                const autoLogIdx = body.indexOf('## _AUTO_LOG');
+                if (autoLogIdx > 0) {
+                    newBody = body.substring(0, autoLogIdx).trimEnd() + '\n\n' + sessionLogHeader + '\n' + summary + '\n\n' + body.substring(autoLogIdx);
+                } else {
+                    newBody = body.trimEnd() + '\n\n' + sessionLogHeader + '\n' + summary + '\n';
+                }
             }
+
+            const { writeFileSync: wfs } = await import('fs');
+            const { buildFrontmatter } = await import('../../src/storage/files.js');
+            meta.updated = new Date().toISOString();
+            const finalContent = buildFrontmatter(meta) + newBody.trim() + '\n';
+            wfs(filepath, finalContent, 'utf8');
+
+            hookLog('INFO', 'Stop: session summary written', { target, entries: entries.length, summary_len: summary.length });
+        } finally {
+            releaseLock(filepath);
         }
-
-        const { writeFileSync } = await import('fs');
-        const { buildFrontmatter } = await import('../../src/storage/files.js');
-        meta.updated = new Date().toISOString();
-        writeFileSync(filepath, buildFrontmatter(meta) + newBody.trim() + '\n', 'utf8');
-
-        hookLog('INFO', 'Stop: session summary written', { target, entries: entries.length, summary_len: summary.length });
     } catch (err) {
         hookLog('WARN', 'Stop: summary error', { error: err?.message });
     }

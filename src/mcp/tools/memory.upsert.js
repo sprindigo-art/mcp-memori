@@ -29,8 +29,8 @@ function isContentHashDuplicate(sectionName, content) {
             if ((now - v) > COOLDOWN_MS) contentDedupMap.delete(k);
         }
     }
-    const trimmed = (content || '').trim().substring(0, 150);
-    const hashInput = (sectionName || '') + '::' + trimmed;
+    const full = (content || '').trim();
+    const hashInput = (sectionName || '') + '::' + full.substring(0, 500) + '::' + full.length;
     const hash = createHash('sha256').update(hashInput, 'utf8').digest('hex');
     const existing = contentDedupMap.get(hash);
     if (existing && (now - existing) < COOLDOWN_MS) return true;
@@ -43,9 +43,9 @@ function isContentHashDuplicate(sectionName, content) {
  * Replaces individual try/catch blocks throughout the file
  */
 function updateAllIndexes(filename) {
-    try { updateIndexEntry(filename); } catch {}
-    updateVectorEntry(filename).catch(() => {});
-    try { updateGraphEntry(filename); } catch {}
+    try { updateIndexEntry(filename); } catch (e) { logger.warn('FTS5 index update failed', { filename, error: e?.message }); }
+    updateVectorEntry(filename).catch(e => { logger.warn('Vector index update failed', { filename, error: e?.message }); });
+    try { updateGraphEntry(filename); } catch (e) { logger.warn('Graph index update failed', { filename, error: e?.message }); }
 }
 
 /**
@@ -99,6 +99,7 @@ export const definition = {
                         success: { type: 'boolean', description: 'Whether the action succeeded' },
                         replace_section: { type: 'string', description: 'Replace existing ## section with new content instead of append. Section name without ## prefix (e.g. "CREDENTIAL", "RE-ENTRY CHECKLIST"). If section not found, appends instead.' },
                         replace_text: { type: 'string', description: 'Find this exact text in the runbook and replace it with content. Like Edit tool — surgical edit without replacing entire section. Text must be unique in the file.' },
+                        replace_entry: { type: 'string', description: 'Replace a ### entry by its title (fuzzy match). Finds the ### heading that best matches this string and replaces everything from that ### to the next ### or ## with new content. Use when updating existing entry with newer data (e.g. "dbcluster1 MySQL ROOT" to update old entry about dbcluster1).' },
                         append_to_section: { type: 'string', description: 'Append content to END of specific ## section (preserving ALL existing content in that section). Section name without ## prefix (e.g. "CREDENTIAL", "GAGAL", "EXPLOIT"). If section not found, creates it. RECOMMENDED over replace_section for adding entries.' },
                         auto_dual_save: { type: 'boolean', description: 'If true, auto-save failures to Kesalahan Universal + successes to Teknik Berhasil Universal. Default: false. Only set true when you want cross-target learning.' }
                     },
@@ -628,6 +629,87 @@ export async function execute(params) {
                 } catch (replaceErr) {
                     logger.error('Replace section error', { error: replaceErr.message, filename: actualFilename });
                     results.push({ id: actualFilename, status: 'error', action: 'replace_section_error', error: replaceErr.message, filepath });
+                    continue;
+                }
+            }
+
+            // === REPLACE ENTRY MODE: Ganti entry berdasarkan ### title (fuzzy match) ===
+            if (item.replace_entry && fileExists) {
+                try {
+                    acquireLock(filepath);
+                    try {
+                        const raw = readFileSync(filepath, 'utf8');
+                        const { meta, body } = parseFrontmatter(raw);
+                        const searchTitle = item.replace_entry.replace(/^###\s*/, '').trim().toLowerCase();
+
+                        // Find ### entry by fuzzy title match
+                        const entryRegex = /^### .+$/gm;
+                        let bestMatch = null;
+                        let bestScore = 0;
+                        let match;
+                        while ((match = entryRegex.exec(body)) !== null) {
+                            const entryTitle = match[0].replace(/^### /, '').trim().toLowerCase();
+                            // Score: exact match = 100, contains = 80, word overlap
+                            let score = 0;
+                            if (entryTitle === searchTitle) score = 100;
+                            else if (entryTitle.includes(searchTitle)) score = 80;
+                            else if (searchTitle.includes(entryTitle)) score = 70;
+                            else {
+                                const searchWords = searchTitle.split(/[\s\-_.,]+/).filter(w => w.length >= 3);
+                                const entryWords = entryTitle.split(/[\s\-_.,]+/).filter(w => w.length >= 3);
+                                const overlap = searchWords.filter(w => entryWords.some(ew => ew.includes(w) || w.includes(ew))).length;
+                                if (searchWords.length > 0) score = (overlap / searchWords.length) * 60;
+                            }
+                            if (score > bestScore) {
+                                bestScore = score;
+                                bestMatch = { index: match.index, title: match[0] };
+                            }
+                        }
+
+                        if (!bestMatch || bestScore < 40) {
+                            results.push({
+                                id: actualFilename, version: meta.version || 1, status: 'error',
+                                action: 'replace_entry_not_found',
+                                error: `No ### entry matching "${item.replace_entry}" found (best score: ${Math.round(bestScore)}).`,
+                                suggestion: 'Use append_to_section to create new entry instead.'
+                            });
+                            continue;
+                        }
+
+                        // Find entry end: next ### or next ## (major section)
+                        const afterEntry = body.substring(bestMatch.index + bestMatch.title.length);
+                        const nextEntryMatch = afterEntry.match(/\n(?=### |\n## )/);
+                        const entryEnd = nextEntryMatch
+                            ? bestMatch.index + bestMatch.title.length + nextEntryMatch.index
+                            : body.length;
+
+                        const oldEntry = body.substring(bestMatch.index, entryEnd);
+                        const now = new Date().toISOString().split('T')[0];
+                        const newEntry = `### ${item.replace_entry.replace(/^###\s*/, '').trim()} (updated ${now})\n${content}`;
+                        const newBody = body.substring(0, bestMatch.index) + newEntry + '\n' + body.substring(entryEnd);
+
+                        meta.version = (meta.version || 1) + 1;
+                        meta.updated = new Date().toISOString();
+                        atomicWriteFileSync(filepath, buildFrontmatter(meta) + newBody.trim() + '\n', 'utf8');
+                        invalidateGetCache(actualFilename);
+                        updateAllIndexes(actualFilename);
+
+                        logger.info('ENTRY REPLACED', { filename: actualFilename, entry: bestMatch.title, old_size: oldEntry.length, new_size: newEntry.length, score: bestScore });
+                        results.push({
+                            id: actualFilename, version: meta.version, status: 'active',
+                            action: 'entry_replaced',
+                            matched_entry: bestMatch.title.substring(0, 100),
+                            match_score: Math.round(bestScore),
+                            old_size: oldEntry.length,
+                            new_size: newEntry.length,
+                            filepath
+                        });
+                        continue;
+                    } finally {
+                        releaseLock(filepath);
+                    }
+                } catch (replaceErr) {
+                    results.push({ id: actualFilename, status: 'error', action: 'replace_entry_error', error: replaceErr.message, filepath });
                     continue;
                 }
             }

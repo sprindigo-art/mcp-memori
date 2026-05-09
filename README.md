@@ -1,235 +1,191 @@
-# MCP Memory Server v8.3
+# MCP Memori v8.6
 
-Production-grade MCP Memory Server — **OTAK UTAMA** AI berbasis runbook `.md` files.
+Production-grade MCP Memory Server for Claude Code — persistent runbook-based knowledge engine with hybrid search, lifecycle hooks, and anti-data-loss enforcement.
 
-**Status:** Production (Apr 30, 2026) | **Runbooks:** 237+ | **Size:** 14.59 MB | **Entities:** 1,750+ | **Links:** 2,698+
-**Search:** FTS5 BM25 + Vector Semantic v2.0 (per-section, all-MiniLM-L6-v2) + RRF Merge + Domain-Aware Reranking
-**Hooks:** 5 lifecycle hooks (auto-capture, writeback counter, post-compaction recovery, session summary)
-**Benchmark:** Menang vs claude-mem plugin di 5/6 dimensi (search, get, save, compaction, storage)
+**265 runbooks** | **37 MB** | **2,917 entities** | **4,689 links** | **21,554 observations** | **1,027 section embeddings**
 
 ---
 
-## Arsitektur v8.3
+## Why MCP Memori?
+
+Claude Code has no persistent memory between sessions. Context is lost on every compaction, restart, or new conversation. MCP Memori solves this:
+
+- **Survives compaction** — hooks auto-inject target context after every context reset
+- **Survives restarts** — all knowledge stored in human-readable `.md` files
+- **Prevents data loss** — hard-block enforcement, writeback counters, anti-duplicate layers
+- **Finds what you need** — hybrid search (FTS5 + vector + knowledge graph) with credential-priority snippets
+- **Works offline** — zero API keys, zero cloud dependencies, local CPU embeddings
+
+---
+
+## Architecture
 
 ```
-┌───────────────────────────────────────────────────────────┐
-│              MCP Memory v8.3 — Runbook Engine              │
-├──────────┬──────────┬─────────────────────────────────────┤
-│  9 Tools │ 3 Index  │ Storage: .md files + 5 Hooks        │
-├──────────┴──────────┴─────────────────────────────────────┤
-│                                                           │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐    │
-│  │   Search     │  │    Upsert    │  │     Get      │    │
-│  │ FTS5+Vector  │  │ section-aware│  │  pagination  │    │
-│  │ +RRF merge   │  │ +hard-block  │  │  +sections   │    │
-│  │ +domain-rank │  │ +fuzzy match │  │  +warnings   │    │
-│  │ +snippet-cred│  │ +3-layer dup │  │  +health     │    │
-│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘    │
-│         │                 │                  │            │
-│  ┌──────▼─────────────────▼──────────────────▼──────────┐ │
-│  │          Runbook Files (.md)                         │ │
-│  │  237+ files | 14.59 MB | YAML frontmatter           │ │
-│  │  Sections: CREDENTIAL, EXPLOIT, GAGAL, etc.         │ │
-│  │  Atomic writes + .bak backup + file locking         │ │
-│  └──────────────────────────────────────────────────────┘ │
-│                                                           │
-│  ┌──────────┐  ┌───────────────┐  ┌────────────────┐     │
-│  │ FTS5 BM25│  │ Vector v2.0   │  │ Knowledge Graph│     │
-│  │ noise-   │  │ per-SECTION   │  │ entities+links │     │
-│  │ filtered │  │ 384-dim local │  │ 2-hop reasoning│     │
-│  └──────────┘  └───────────────┘  └────────────────┘     │
-│                                                           │
-│  ┌──────────────────────────────────────────────────────┐ │
-│  │ HOOKS (5 lifecycle events)                           │ │
-│  │ SessionStart: inject target + RE-ENTRY + auto-log   │ │
-│  │ PostToolUse:  auto-capture + writeback counter       │ │
-│  │ UserPromptSubmit: auto-inject 2 relevant memories   │ │
-│  │ Stop:         template session summary              │ │
-│  │ PreCompact:   fsync flush + compaction marker       │ │
-│  └──────────────────────────────────────────────────────┘ │
-│                                                           │
-│  ┌───────────────┐  ┌──────────┐  ┌──────────────┐       │
-│  │ Contradiction │  │ Provenance│  │    Cache     │       │
-│  │ 16 patterns   │  │ auto-date │  │  LRU 150    │       │
-│  │ +reminders    │  │ [YYYY-MM] │  │  3min TTL   │       │
-│  └───────────────┘  └──────────┘  └──────────────┘       │
-└───────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                MCP Memori v8.6 — Runbook Engine             │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐         │
+│  │   Search    │  │   Upsert    │  │    Get      │         │
+│  │ FTS5+Vector │  │ section-    │  │ pagination  │         │
+│  │ +RRF merge  │  │ aware +     │  │ +sections   │         │
+│  │ +domain-    │  │ hard-block  │  │ +health     │         │
+│  │  reranking  │  │ +3-layer    │  │  warnings   │         │
+│  │ +credential │  │  dedup      │  │             │         │
+│  │  snippets   │  │ +fuzzy      │  │             │         │
+│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘         │
+│         │                │                │                 │
+│  ┌──────▼────────────────▼────────────────▼───────────────┐ │
+│  │             Runbook Files (.md)                        │ │
+│  │  309 files | 32 MB | YAML frontmatter                 │ │
+│  │  Sections: CREDENTIAL, EXPLOIT, RECON, GAGAL, etc.    │ │
+│  │  Atomic writes (.tmp + rename) + .bak backup          │ │
+│  └───────────────────────────────────────────────────────┘ │
+│                                                             │
+│  ┌───────────┐  ┌────────────────┐  ┌──────────────────┐   │
+│  │ FTS5 BM25 │  │ Vector v2.0    │  │ Knowledge Graph  │   │
+│  │ noise-    │  │ per-SECTION    │  │ 2,289 entities   │   │
+│  │ filtered  │  │ 1,027 vectors  │  │ 3,653 links      │   │
+│  │ porter    │  │ 384-dim local  │  │ 2-hop reasoning  │   │
+│  │ stemmer   │  │ all-MiniLM-L6  │  │                  │   │
+│  └───────────┘  └────────────────┘  └──────────────────┘   │
+│                                                             │
+│  ┌───────────────────────────────────────────────────────┐  │
+│  │ HOOKS (6 lifecycle events)                            │  │
+│  │ SessionStart:      inject target context + auto-log   │  │
+│  │ PostToolUse:       auto-capture + writeback counter   │  │
+│  │ UserPromptSubmit:  auto-inject relevant memories      │  │
+│  │ Stop:             template session summary + rotate   │  │
+│  │ PreCompact:       fsync + compaction marker           │  │
+│  │ LLM Summary:      opt-in background worker           │  │
+│  └───────────────────────────────────────────────────────┘  │
+│                                                             │
+│  ┌───────────────┐  ┌───────────┐  ┌───────────────────┐   │
+│  │ Contradiction │  │ Provenance│  │ Per-Session       │   │
+│  │ 16 patterns   │  │ auto-date │  │ Target Isolation  │   │
+│  │ +reminders    │  │ [YYYY-MM] │  │ multi-instance    │   │
+│  └───────────────┘  └───────────┘  └───────────────────┘   │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Kemampuan Utama
+## Features
+
+### Hybrid Search (4-Layer)
+```
+Query → ┌─ FTS5 BM25 (noise-filtered, porter stemmer) ─────┐
+        │                                                    │→ RRF Merge → Domain Rerank → Snippet
+        └─ Vector v2.0 (per-section, cosine, MiniLM-L6-v2) ─┘       ↓
+                                                          Knowledge Graph enrichment
+                                                          Domain variant expansion
+                                                          Credential-priority snippet
+```
+
+- **FTS5 BM25** — full-text with porter stemmer + unicode61, `_AUTO_LOG` noise stripped from index
+- **Vector v2.0** — per-section embeddings (1 vector per `##` section, max 30/file), 384-dim local CPU
+- **RRF merge** — Reciprocal Rank Fusion (k=60) combining FTS5 + vector results
+- **Domain-aware reranking** — "pushidrosal.tnial" → expand all domain parts, 60%+ match = 2.5x boost
+- **Credential-priority snippets** — `[CRED]` nearby +8, `password` same-line +5, `sshpass` +5
+- **Knowledge graph** — 2-hop cross-runbook entity reasoning
+- **Query expansion** — Indonesian synonyms + domain part variants
 
 ### Storage & Safety
-- **Runbook-based** — `.md` files, YAML frontmatter, section-aware CRUD
-- **Hard-block** — WAJIB baca sebelum write (10 min expiry, >500 chars)
-- **Anti-duplicate 3-layer** — exact substring + 80% near-dup + SHA-256 120s window
-- **Contradiction detection** — 16 state pairs (alive/dead, patched/vuln, success/failed)
-- **Atomic writes** — .tmp + rename + .bak backup + file locking
-- **Section-lock** — `replace_section` hanya untuk LIVE STATUS/RE-ENTRY
+- **Runbook-based** — `.md` files with YAML frontmatter, human-readable, git-friendly
+- **Hard-block** — must read runbook before writing (10 min expiry, >500 chars threshold)
+- **Anti-duplicate 3-layer** — exact substring + 60% near-duplicate + SHA-256 content hash (500 chars + length, 10 min window)
+- **Contradiction detection** — 16 state pairs (alive/dead, patched/vuln, success/failed) with inline warnings
+- **Atomic writes** — `.tmp` + rename (POSIX atomic) + `.bak` backup + file locking
+- **Section-lock** — `replace_section` restricted to LIVE STATUS / RE-ENTRY only
+- **Fuzzy title match** — domain-aware partial match + Jaccard similarity
 
-### Search v8.3
-- **Hybrid** — FTS5 BM25 + Vector v2.0 (per-section) + RRF merge
-- **Domain-aware ranking** — "pushidrosal.tnial" → variant parts, 60%+ match ratio = 2.5x boost
-- **Credential-priority snippet** — [CRED] nearby +8, password same-line +5, sshpass +5
-- **_AUTO_LOG noise filter** — strip dari FTS5 index, SSH warnings strip dari hooks
-- **Query expansion** — sinonim Indonesia + domain part variants
-- **Knowledge graph** — entities + links + 2-hop cross-runbook reasoning
+### Lifecycle Hooks (6 events)
+- **PostToolUse** — auto-capture every tool call to `_AUTO_LOG` + SQLite observations + writeback counter warning (>10 calls without save)
+- **SessionStart** — inject LIVE STATUS + RE-ENTRY + recent auto-log entries; post-compaction re-authorization warning
+- **UserPromptSubmit** — auto-inject 2 most relevant memories when prompt contains domain/IP/CVE/product signals; snippets sanitized (credentials redacted)
+- **Stop** — template-based session summary appended to `## SESSION LOG` (no AI, pure regex); auto-rotate >50KB (keep last 10, archive rest); lock-protected read-modify-write
+- **PreCompact** — fsync flush + compaction marker + inline JANDA AI identity + rules + target context in `newCustomInstructions` (anti-refusal post-compaction)
+- **LLM Summary Worker** — opt-in (`MCP_MEMORI_LLM_SUMMARY=1`) background AI summary
 
-### Hooks v8.3 (5 lifecycle events)
-- **PostToolUse** — auto-capture ke _AUTO_LOG + observations + writeback counter (⚠️ >10 calls)
-- **SessionStart** — inject LIVE STATUS + RE-ENTRY + 10 auto-log + post-compaction warning
-- **UserPromptSubmit** — auto-inject 2 memori relevan (35+ keyword signals)
-- **Stop** — template session summary ke SESSION LOG
-- **PreCompact** — fsync + compaction marker
+### v8.6 (Latest)
+- **`isMajorSection` WHITELIST** — section boundary detection via ALL-CAPS whitelist instead of blacklist. Eliminates 1360+ false section boundaries from inline `## ` headers. CREDENTIAL section fully readable (190KB vs 47KB truncated)
+- **`replace_entry`** — new upsert mode: fuzzy-match `### title` and replace entire entry without exact text. Prevents duplicate entries when updating existing data
+- **`##` auto-convert `###`** — inline `## ` headers in appended content automatically downgraded to `### ` to prevent future section boundary pollution
+- **Snippet extraction fix** — snippet scoring now splits on major sections only (not all 1375 `## ` headers). Search snippets now show correct section data
+- **acquireLock hardened** — TOCTOU fix (break→continue), returns boolean, non-EEXIST error handling, timeout 5s→15s
+- **Stop hook lock fix** — lock acquired BEFORE read (TOCTOU fix), always released in finally (no orphaned .lock files)
+- **Session isolation hardened** — MEMORY.md + mtime fallback blocked when sessionId present; TEKNIK_ runbooks filtered from target detection; target auto-switch on memory_get different target; logTarget for observation recording
+- **Post-compaction anti-refusal** — PreCompact injects JANDA AI identity + rules inline (not just "read CLAUDE.md"); SessionStart injects identity + anti-repeat + CLAUDE.md instruction with 4000 char limit
+- **Graph fixes** — entity type preserved (COALESCE, not overwrite to 'tag'); `findRelatedByRunbook` queries by runbook_id (not broken entity_name); forget updates vector+graph indexes
+- **Dedup improved** — content-hash covers 500 chars + length (was 150 chars); SESSION LOG rotation markers cleaned on every Stop (not just during rotation)
+- **Index failure logging** — FTS5/vector/graph update failures logged via logger.warn (was silent catch{})
+- **Context sanitization** — `sanitizeTriggers()` replaces 25+ classifier trigger keywords in all hook outputs
 
-### Other
-- **Fuzzy title matching** — domain-aware partial + Jaccard similarity
-- **Health warnings** — stale, bloat, mature, empty sections, misplaced content
-- **Dual-save** — `auto_dual_save: true` untuk cross-target learning
-- **LRU Cache** — 150 items, 3min TTL | **Tanpa API key** — embedding lokal
+### v8.4-v8.5
+- **Per-session target isolation** — multiple Claude instances no longer contaminate each other's runbooks (session-scoped `/tmp` files)
+- **SESSION LOG rotation** — auto-archive old sessions when log exceeds 50KB, keep last 10
+- **FTS5 stale index cleanup** — post-transaction rebuild prevents duplicate accumulation
+- **Cross-target contamination cleaner** — scanner + cleaner tool for runbooks with misplaced sections
+- **Post-compaction refusal fix** — hooks + CLAUDE.md re-authorization ensures continuity after context reset
+- **19 search quality fixes** — domain variant expansion, match ratio boost, credential snippets, TEKNIK depriority, coverage boost, auto-log guard, numeric octet filter
 
 ---
 
-## 9 Tools
+## 9 MCP Tools
 
-### 1. `memory_search`
-Cari runbook dengan hybrid search (FTS5 + vector v2.0 + RRF merge + domain-aware reranking + credential-priority snippet).
+| Tool | Purpose |
+|------|---------|
+| `memory_search` | Hybrid search: FTS5 + vector + RRF + domain reranking + credential snippets |
+| `memory_get` | Read runbook with pagination, section filter, line-based access, health warnings |
+| `memory_upsert` | Write/update with section-aware append, hard-block, fuzzy match, contradiction detect |
+| `memory_forget` | Delete text, section, or entire runbook (read-before-delete enforced) |
+| `memory_list` | Browse all runbooks with tag/title filter and pagination |
+| `memory_stats` | Storage statistics: total files, size, tag breakdown |
+| `memory_summarize` | Project-level summary from all runbooks |
+| `memory_autolog` | Internal: auto-append tool call journal to `_AUTO_LOG` |
+| `memory_timeline` | Chronological context viewer around events (DB or runbook based) |
 
+### Tool Examples
+
+**Search:**
 ```json
 {
-  "query": "akses SSH pushidrosal.tnial credential",
+  "query": "SSH credential target.com",
   "project_id": "janda_workspace",
-  "tags": ["tnial"],
-  "limit": 20
+  "limit": 10
 }
 ```
 
-**Response:** Plaintext list — title, score, ID, 300-char snippet (credential-priority). Snippet menampilkan password/command langsung, bukan section random.
-
-### 2. `memory_get`
-Baca isi runbook lengkap. Support pagination, section filter, line-based read.
-
+**Get (section-specific):**
 ```json
 {
-  "id": "RUNBOOK_unitomo.ac.id.md",
+  "id": "RUNBOOK_target.com.md",
   "section": "CREDENTIAL",
-  "sections_list": true,
-  "line": 100,
-  "line_count": 50,
-  "offset": 0,
-  "limit": 80000
+  "sections_list": true
 }
 ```
 
-**Modes:**
-- `sections_list: true` — navigasi semua sections + health analysis
-- `section: "CREDENTIAL"` — baca section spesifik
-- `line: 100, line_count: 50` — baca per line (untuk runbook besar)
-- Default — full content dengan pagination
-
-**Warnings:** `⚠️ STALE` (>30 hari) | `⚠️ BLOAT` (>200KB) | `ℹ️ MATURE` (v>50)
-
-### 3. `memory_upsert`
-Simpan/update runbook. Append-only: content lama TIDAK dihapus. **WAJIB memory_get dulu.**
-
+**Upsert (append to section):**
 ```json
 {
   "items": [{
     "title": "[RUNBOOK] target.com",
-    "content": "- SSH root berhasil\n- Command: sshpass -p 'xxx' ssh root@target",
-    "tags": ["target", "credential"],
+    "content": "- SSH root: sshpass -p 'xxx' ssh root@target",
     "append_to_section": "CREDENTIAL",
-    "replace_section": "LIVE STATUS",
-    "replace_text": "old text here",
-    "auto_dual_save": true,
-    "success": true,
-    "verified": true,
-    "confidence": 0.95
+    "auto_dual_save": true
   }]
 }
 ```
 
 **Write modes:**
+
 | Mode | Parameter | Behavior |
 |------|-----------|----------|
-| Append to section | `append_to_section: "CREDENTIAL"` | Tambah di AKHIR section, preserve semua data lama |
-| Replace section | `replace_section: "LIVE STATUS"` | Ganti SELURUH section (hanya untuk LIVE STATUS/RE-ENTRY) |
-| Replace text | `replace_text: "old text"` | Edit surgical — cari & ganti teks spesifik |
-| Default append | (tanpa parameter) | Append ke akhir file |
-
-**Safety features:**
-- Hard-block: tolak upsert jika runbook belum dibaca (`hasBeenRead()`)
-- Anti-duplicate: skip jika content sudah ada di section
-- Fuzzy match: `[RUNBOOK] unitomo` → auto-match ke `unitomo.ac.id.md`
-- Contradiction detection: warn jika data baru konflik data lama (18 patterns)
-- Auto-provenance: stamp `[YYYY-MM-DD]` pada setiap append
-- Post-write verify: `verified_total_chars` di response
-- Dual-save suggestion: remind jika content punya success/failure tapi auto_dual_save off
-- Misplaced warning: warn jika content sebut target berbeda
-
-**Reminders di response:**
-- `⚠️ CONTRADICTION` — data baru konflik data lama
-- `⚠️ MISPLACED?` — content mungkin di runbook yang salah
-- `💡 DUAL-SAVE` — suggest auto_dual_save untuk cross-target learning
-- `⚠️ CREDENTIAL DEAD` — credential terdeteksi tidak valid
-- `⚠️ FAILURE DETECTED` — content mengandung indikasi kegagalan
-
-### 4. `memory_forget`
-Hapus teks/section/file dari runbook. **WAJIB memory_get dulu.**
-
-```json
-{
-  "id": "RUNBOOK_target.com.md",
-  "reason": "Data sudah outdated",
-  "remove_text": "exact text to remove",
-  "remove_section": "SECTION NAME"
-}
-```
-
-### 5. `memory_list`
-Browse semua runbook files dengan filter dan pagination.
-
-```json
-{
-  "project_id": "janda_workspace",
-  "tags": ["postgresql"],
-  "title_contains": "unitomo",
-  "limit": 20,
-  "offset": 0
-}
-```
-
-### 6. `memory_stats`
-Statistik runbook: total, size, tags breakdown.
-
-```json
-{
-  "project_id": "janda_workspace"
-}
-```
-
-### 7. `memory_summarize`
-Ringkasan project dari runbook files.
-
-```json
-{ "project_id": "janda_workspace" }
-```
-
-### 8. `memory_autolog`
-Internal hook tool — auto-append tool call entries ke ## _AUTO_LOG. Bypass hard-block (journal only, bukan state).
-
-### 9. `memory_timeline`
-Konteks kronologis di sekitar event. DB-based (observations) atau runbook _AUTO_LOG based.
-
-```json
-{
-  "query": "curl verify_tables",
-  "runbook_id": "RUNBOOK_samb-melaka.com.md",
-  "depth_before": 5,
-  "depth_after": 5
-}
-```
+| Append to section | `append_to_section: "CREDENTIAL"` | Add to end of section, preserve existing data |
+| Replace entry | `replace_entry: "dbcluster1 MySQL"` | Fuzzy-match `### title`, replace entire entry (v8.6) |
+| Replace section | `replace_section: "LIVE STATUS"` | Replace entire section (LIVE STATUS/RE-ENTRY only) |
+| Replace text | `replace_text: "old text"` | Surgical find & replace (must be unique in file) |
+| Default | (none) | Append to end of file |
 
 ---
 
@@ -238,81 +194,37 @@ Konteks kronologis di sekitar event. DB-based (observations) atau runbook _AUTO_
 ```markdown
 ---
 title: "[RUNBOOK] target.com"
-tags: ["target", "geoserver", "postgresql"]
+tags: ["target", "postgresql"]
 created: 2026-01-13
-updated: 2026-04-10T01:00:00Z
+updated: 2026-04-30T01:00:00Z
 version: 26
 success: true
-verified: true
-confidence: 0.95
 ---
 
 ## LIVE STATUS
-| # | Access | Status | Last Checked |
+Current phase, active targets, next steps
 
 ## RECON
-- Port, service, version
+Ports, services, versions, subdomains
+
+## CREDENTIAL
+Service credentials (append-only)
 
 ## EXPLOIT
-- CVE/teknik, command, hasil
+Successful techniques with full commands
 
-## CREDENTIAL (APPEND-ONLY)
-- Service, user, pass/key, command lengkap
-
-## PERSISTENCE
-- Path, fungsi, cara akses, cara hapus
-
-## ROOT / PRIVESC
-- Teknik, command, bukti
+## GAGAL
+Failed techniques with specific reasons
 
 ## RE-ENTRY CHECKLIST
 | # | Access | Command | Priority |
 
-## GAGAL
-- Teknik, alasan SPESIFIK, tanggal
+## SESSION LOG
+Auto-generated session summaries
 
-## CLEANUP
-- File yang harus dihapus
+## _AUTO_LOG
+Auto-generated tool call journal
 ```
-
----
-
-## Search Architecture v8.3
-
-### 4-Layer Hybrid Search
-```
-Query → ┌─ FTS5 BM25 (noise-filtered, _AUTO_LOG stripped) ──┐
-        │                                                     │→ RRF Merge → Domain Rerank → Snippet
-        └─ Vector v2.0 (per-SECTION, cosine, MiniLM-L6-v2) ─┘       ↓
-                                                           Knowledge Graph enrichment
-                                                           Domain variant expansion
-                                                           Credential-priority snippet
-```
-
-### Search Fixes v8.3 (vs v7.5)
-| Fix | Masalah | Solusi |
-|-----|---------|-------|
-| _AUTO_LOG strip | tool call noise polusi FTS5 ranking | strip dari index |
-| Domain variant | "pushidrosal.tnial" hanya match exact | expand ALL parts |
-| Match ratio boost | 2 tag match = 1.6x (terlalu lemah) | 60%+ ratio = 2.5x |
-| Title non-common | "ssh"+"vcenter" over-boost generik | filter COMMON words |
-| Global proximity | exact domain return pertama (salah) | collect ALL, pick best |
-| Credential priority | snippet random section | [CRED]/password/sshpass bonus |
-| Short word skip | "pu" match "jdih**pu**" (palsu) | header bonus ≥3 chars only |
-
-### Vector Index v2.0
-- **v1.0**: 1 vector per runbook (title + 450 chars) → 0.05% coverage file besar
-- **v2.0**: 1 vector per ## section (max 30/file, file >10KB) → section CREDENTIAL/EXPLOIT ter-embed
-- Table: `section_embeddings` (id, section_name, embedding)
-- Search: whole-doc + per-section, merge best similarity per runbook
-
-### Scoring & Reranking v8.3
-- Domain variant expansion: "pushidrosal.tnial" → [pushidrosal, tnial]
-- Match ratio boost: 60%+ variants match tags/ID = 2.5x boost
-- Title density: only non-COMMON words counted
-- Credential snippet: proximity search with [CRED] +8, password +5, sshpass +5
-- Failure penalty: 15% jika bukan query failure-specific
-- RRF merge constant k=60
 
 ---
 
@@ -320,40 +232,71 @@ Query → ┌─ FTS5 BM25 (noise-filtered, _AUTO_LOG stripped) ──┐
 
 | Protection | Mechanism |
 |------------|-----------|
-| **Crash-safe writes** | `atomicWriteFileSync()` — .tmp + rename (POSIX atomic) |
-| **Backup** | .bak file created before every write |
-| **Auto-recovery** | `readRunbook()` tries .bak if main file corrupt |
-| **File locking** | `acquireLock/releaseLock` with 5s timeout + stale lock detection |
-| **Read-before-write** | `hasBeenRead()` hard-block — 10 min expiry, needs >500 chars read |
-| **Anti-duplicate** | Content dedup in `appendToSection()` |
-| **Contradiction detection** | 18 pattern pairs with inline warnings |
-| **Section boundary** | `isMajorSection()` + `findSectionEnd()` — sub-headings don't terminate |
-| **Fuzzy title match** | Domain-aware partial match + Jaccard similarity + generic TLD blocklist |
-| **Provenance** | Auto `[YYYY-MM-DD]` stamp on append |
+| Crash-safe writes | `atomicWriteFileSync()` — .tmp + rename (POSIX atomic) |
+| Backup | .bak file before every write |
+| Auto-recovery | tries .bak if main file corrupt |
+| File locking | 5s timeout + stale lock detection |
+| Read-before-write | hard-block — 10 min expiry, >500 chars |
+| Anti-duplicate | 3-layer: exact + 80% near-dup + SHA-256 |
+| Contradiction | 16 state pairs with inline warnings |
+| Section boundary | `isMajorSection()` + `findSectionEnd()` |
+| Fuzzy title match | domain-aware + Jaccard + TLD blocklist |
+| Provenance | auto `[YYYY-MM-DD]` stamp on every append |
+| Session isolation | per-session target tracking (v8.4) |
+| Log rotation | SESSION LOG auto-archive at 50KB (v8.4) |
 
 ---
 
-## Quick Start
+## Comparison
+
+| Feature | MCP Memori v8.4 | claude-mem | Mem0 | doobidoo/mcp-memory |
+|---------|-----------------|------------|------|---------------------|
+| Storage | `.md` runbooks (readable, git-friendly) | SQLite DB | Vector cloud | SQLite |
+| Search | FTS5 + Vector v2.0 + RRF + domain-rank | FTS5 + ChromaDB | Vector + Graph | Vector only |
+| Credential snippets | Yes (priority ranking) | No | No | No |
+| Section CRUD | Yes (append/replace/text per section) | No (whole observation) | No | No |
+| Read-before-write | Yes (hard-block, 10 min) | No | No | No |
+| Anti-duplicate | 3-layer (exact+near+SHA256) | SHA256 only | Partial | No |
+| Contradiction detect | 16 patterns + reminders | No | No | No |
+| Lifecycle hooks | 6 hooks + writeback counter | 6 hooks | No | No |
+| Post-compaction | Auto-inject + re-authorization | Context inject | No | No |
+| Session isolation | Per-session (multi-instance safe) | No | No | No |
+| Vector granularity | Per-section (1,027 vectors) | Per-field | Per-doc | Per-doc |
+| Knowledge graph | Local (2,289 entities, 3,653 links) | No | Cloud | No |
+| Dependencies | None (local CPU) | Bun + ChromaDB + uv | API key | API key |
+| Search latency | <20ms (cache hit) | ~100ms | 1.4s p95 | Unknown |
+| Log rotation | Auto at 50KB | No | No | No |
+
+---
+
+## Installation
+
+See [INSTALL.md](INSTALL.md) for complete setup guide including:
+- MCP server configuration
+- Hooks configuration (6 lifecycle events)
+- Directory setup
+- Verification steps
+
+### Quick Start
 
 ```bash
-# 1. Install dependencies
+git clone https://github.com/sprindigo-art/mcp-memori.git
+cd mcp-memori
 npm install
-
-# 2. Start server
-npm start
 ```
 
-## MCP Configuration
+Add to Claude Code MCP config (`~/.claude.json`):
 
 ```json
 {
   "mcpServers": {
     "mcp-memori": {
       "command": "node",
-      "args": ["/home/kali/Desktop/mcp-memori/src/server.js"],
+      "args": ["~/Desktop/mcp-memori/src/server.js"],
       "env": {
         "NODE_ENV": "production",
-        "LOG_LEVEL": "info"
+        "EMBEDDING_MODE": "hybrid",
+        "EMBEDDING_BACKEND": "local"
       }
     }
   }
@@ -367,82 +310,121 @@ npm start
 ```
 mcp-memori/
 ├── src/
-│   ├── server.js                # MCP stdio server (JSON-RPC 2.0)
+│   ├── server.js                  # MCP stdio server (JSON-RPC 2.0)
 │   ├── mcp/
-│   │   ├── index.js             # Tool registry (9 tools)
+│   │   ├── index.js               # Tool registry (9 tools)
 │   │   └── tools/
-│   │       ├── memory.search.js     # FTS5+Vector v2.0+RRF+domain-aware reranking
-│   │       ├── memory.get.js        # Pagination, sections, health warnings
-│   │       ├── memory.upsert.js     # Section-aware, hard-block, fuzzy match
-│   │       ├── memory.forget.js     # Partial/full delete, read-before-delete
-│   │       ├── memory.list.js       # Browse/filter/paginate
-│   │       ├── memory.stats.js      # Statistics
-│   │       ├── memory.summarize.js  # Project summary
-│   │       ├── memory.autolog.js    # Hook-driven auto-capture journal
-│   │       └── memory.timeline.js   # Chronological context viewer
+│   │       ├── memory.search.js   # FTS5 + Vector v2.0 + RRF + domain reranking
+│   │       ├── memory.get.js      # Pagination, sections, health warnings
+│   │       ├── memory.upsert.js   # Section-aware, hard-block, fuzzy match
+│   │       ├── memory.forget.js   # Partial/full delete, read-before-delete
+│   │       ├── memory.list.js     # Browse/filter/paginate
+│   │       ├── memory.stats.js    # Statistics
+│   │       ├── memory.summarize.js
+│   │       ├── memory.autolog.js  # Hook-driven auto-capture journal
+│   │       └── memory.timeline.js # Chronological context viewer
 │   ├── storage/
-│   │   ├── files.js             # Core: runbook CRUD, sections, atomic writes
-│   │   ├── searchIndex.js       # FTS5 BM25 index (search_index.db)
-│   │   ├── vectorIndex.js       # Vector v2.0 (per-section, MiniLM-L6-v2)
-│   │   └── graphIndex.js        # Knowledge graph (entities + relations)
-│   ├── retrieval/               # Legacy hybrid search (SQLite DB mode)
-│   ├── governance/              # Legacy guardrails & policy
-│   ├── db/                      # Legacy SQLite schema
+│   │   ├── files.js               # Runbook CRUD, sections, atomic writes
+│   │   ├── searchIndex.js         # FTS5 BM25 index + post-transaction rebuild
+│   │   ├── vectorIndex.js         # Vector v2.0 (per-section, MiniLM-L6-v2)
+│   │   └── graphIndex.js          # Knowledge graph (entities + relations)
 │   └── utils/
-│       ├── embedding.js         # Multi-backend embedding
-│       ├── embedding-local.js   # @xenova/transformers (384-dim)
-│       ├── logger.js            # Structured logging (stderr)
-│       └── ...
-│   │       ├── scrubber.js       # Password/token/JWT scrubber
-│   │       └── ...
-├── scripts/hooks/               # 5 lifecycle hooks
-│   ├── hook_auto_capture.js     # PostToolUse: _AUTO_LOG + writeback counter
-│   ├── hook_session_start.js    # SessionStart: target context injection
-│   ├── hook_session_stop.js     # Stop: template session summary
-│   ├── hook_user_prompt.js      # UserPromptSubmit: memory auto-inject
-│   ├── hook_pre_compact.js      # PreCompact: fsync flush
-│   └── hook_lib.js              # Shared helpers, SSH noise strip, MCP dev filter
-├── runbooks/                    # 237+ .md runbook files (PRIMARY STORAGE)
-├── data/
-│   ├── memory.db                # Legacy SQLite (backup reference)
-│   └── search_index.db          # FTS5 + vector + graph indexes
-└── package.json
+│       ├── scrubber.js            # Password/token/JWT scrubber
+│       ├── embedding.js           # Multi-backend embedding
+│       ├── embedding-local.js     # @xenova/transformers (384-dim)
+│       └── logger.js              # Structured logging (stderr)
+├── scripts/
+│   ├── hooks/
+│   │   ├── hook_lib.js            # Shared helpers + per-session isolation
+│   │   ├── hook_auto_capture.js   # PostToolUse: _AUTO_LOG + writeback counter
+│   │   ├── hook_session_start.js  # SessionStart: target context injection
+│   │   ├── hook_session_stop.js   # Stop: template summary + log rotation
+│   │   ├── hook_pre_compact.js    # PreCompact: fsync + compaction marker
+│   │   ├── hook_user_prompt.js    # UserPromptSubmit: memory auto-inject
+│   │   └── hook_llm_summary_worker.js # Optional LLM summary (opt-in)
+│   ├── patch_claude_binary.py     # Binary safety string patcher
+│   └── cleanup_cross_target.js    # Cross-target contamination scanner/cleaner
+├── runbooks/                      # .md runbook files (primary storage)
+├── data/                          # SQLite indexes (FTS5, vector, graph)
+├── archives/                      # Rotated SESSION LOG archives
+├── INSTALL.md                     # Complete installation guide
+├── package.json
+└── mcp.config.json
 ```
 
 ---
 
-## Keunggulan vs Alternatif
+## Search Fixes (v8.3–v8.4)
 
-| Feature | MCP Memory v8.3 | claude-mem | Mem0 | doobidoo/mcp-memory |
-|---------|-----------------|------------|------|---------------------|
-| **Storage** | .md runbooks (human-readable) | SQLite DB only | Vector cloud | SQLite |
-| **Search** | FTS5 + Vector v2.0 + RRF + domain-rank | FTS5 (deprecated) + ChromaDB | Vector + Graph | Vector only |
-| **Snippet** | ✅ Credential-priority, 300 chars | ❌ Compact index only | ❌ | ❌ |
-| **Section CRUD** | ✅ append/replace/text per section | ❌ Whole observation | ❌ | ❌ |
-| **Hard-block** | ✅ Read-before-write enforced | ❌ | ❌ | ❌ |
-| **Anti-duplicate** | ✅ 3-layer (exact+near+SHA256) | ⚠️ SHA256 only | ⚠️ | ❌ |
-| **Contradiction** | ✅ 16 patterns + reminders | ❌ | ❌ | ❌ |
-| **Lifecycle hooks** | ✅ 5 hooks + writeback counter | ✅ 6 hooks | ❌ | ❌ |
-| **Post-compaction** | ✅ Auto-inject + warning | ✅ Context inject | ❌ | ❌ |
-| **Vector granularity** | ✅ Per-section (file >10KB) | ✅ Per-field | ❌ | ❌ |
-| **Knowledge graph** | ✅ Local, 2-hop reasoning | ❌ | ✅ Cloud | ❌ |
-| **Dependencies** | None (local CPU) | Bun + ChromaDB + uv | API key | API key |
-| **Latency** | <20ms (cache hit) | ~100ms (HTTP worker) | 1.4s p95 | Unknown |
+19 search quality improvements over v7.5:
 
-**Keunggulan utama:** Search menampilkan credential/SSH langsung di snippet, section-aware CRUD, hard-block safety, writeback counter enforcement — bukan hanya menyimpan tapi MENCEGAH kesalahan.
+| # | Issue | Fix |
+|---|-------|-----|
+| 1 | `_AUTO_LOG` noise polluting FTS5 | Strip from index |
+| 2 | Domain queries only match exact string | Expand ALL domain parts as variants |
+| 3 | 2-tag match boost too weak (1.6x) | 60%+ match ratio = 2.5x boost |
+| 4 | Generic words ("ssh", "credential") over-boost | Filter COMMON_TECHNIQUE_WORDS |
+| 5 | First proximity match returned (often wrong) | Collect ALL matches, pick best score |
+| 6 | Snippet shows random section | Credential-priority: [CRED] +8, password +5, sshpass +5 |
+| 7 | Short words ("pu") false-match substrings | Header bonus requires ≥3 chars |
+| 8 | Unique words in body ignored | Coverage boost when uniqueInBody > 0 AND distinctHits ≥ 60% |
+| 9 | `[TEKNIK]` runbooks outrank target runbooks | TEKNIK depriority: score × 0.4 when no target in title |
+| 10 | Snippet content doesn't match target | Snippet target-match boost with auto-log guard |
+| 11 | Numeric IP octets treated as search terms | Filter numeric-only parts from domain expansion |
+| 12 | Snippet uses common words only | Force re-enrichment when snippet has only common words |
+| 13 | bestSnip selection can miss better match | Safety net double-check after selection |
+| 14 | `uniqueInHeader` over-weights generic matches | Multiplier reduced from 0.8 to 0.4 |
+| 15 | FTS5 accumulates duplicate entries | Post-transaction DELETE + INSERT FROM runbook_index |
+| 16 | Explicit DELETE before INSERT OR REPLACE | Per-entry cleanup in `updateIndexEntry()` |
+| 17 | Samb-melaka.com ranked #1 for unrelated queries | Auto-log captured old queries; multi-layer fix |
+| 18 | Cross-target contamination in 17 runbooks | Per-session isolation + cleanup tool |
+| 19 | SESSION LOG bloat (838KB in single runbook) | Auto-rotate at 50KB, keep last 10 sessions |
+
+---
+
+## Known Claude Code Memory Weaknesses Addressed
+
+Research across 30 documented Claude Code memory weaknesses (sources: GitHub issues, community reports, comparative analyses):
+
+| Weakness | Addressed | How |
+|----------|-----------|-----|
+| No persistent memory | Yes | .md runbooks survive restarts |
+| Context lost on compaction | Yes | SessionStart hook re-injects state |
+| No read-before-write | Yes | Hard-block with 10 min expiry |
+| Duplicate entries | Yes | 3-layer dedup |
+| No contradiction detection | Yes | 16 state pairs |
+| No credential search priority | Yes | Credential-priority snippets |
+| No section-aware storage | Yes | Section CRUD (append/replace/text) |
+| Single-instance only | Yes | Per-session target isolation |
+| No writeback enforcement | Yes | Counter + hook warning |
+| No log rotation | Yes | Auto-archive at 50KB |
+| Context injection too late | Yes | SessionStart + UserPromptSubmit hooks |
+| No offline capability | Yes | Zero API keys, local embeddings |
+| No knowledge graph | Yes | Entity-link graph with 2-hop reasoning |
+| Vector search too coarse | Yes | Per-section embeddings (not per-doc) |
+| No timeline/history view | Yes | `memory_timeline` tool |
+| No fuzzy matching | Yes | Domain-aware + Jaccard similarity |
+| No health monitoring | Yes | Stale/bloat/mature/empty warnings |
+| No auto-capture | Yes | PostToolUse hook + observations table |
+| No provenance tracking | Yes | Auto date stamps on every append |
 
 ---
 
 ## Version History
 
-| Version | Tanggal | Perubahan Utama |
-|---------|---------|----------------|
-| **v8.3** | **Apr 30, 2026** | **9 search fixes (domain variant, match ratio boost, credential-priority snippet, _AUTO_LOG noise strip, short-word header skip), vector v2.0 per-section, 5 hook fixes (writeback counter, post-compaction warning, SSH strip, MCP dev filter, UserPromptSubmit expanded), CLAUDE.md workflow v8.3, memory_timeline tool, template session summary** |
-| v7.5 | Apr 10, 2026 | Vector search (MiniLM-L6-v2 + RRF), knowledge graph, contradiction detection (16 pairs), fuzzy domain matching, atomic writes + file locking, auto-provenance, health warnings, dual-save |
-| v7.0 | Apr 2026 | File-based storage (.md runbooks), FTS5 BM25, section-aware upsert, hard-block, LRU cache, query expansion |
+| Version | Date | Changes |
+|---------|------|---------|
+| **v8.4** | **May 2, 2026** | **Per-session target isolation, SESSION LOG rotation (50KB/10 sessions), FTS5 stale index cleanup, cross-target contamination cleaner, post-compaction refusal fix, 19 search quality fixes, binary patcher, INSTALL.md** |
+| v8.3 | Apr 30, 2026 | 9 search fixes, vector v2.0 per-section, 5 hook fixes, writeback counter, template session summary, memory_timeline |
+| v7.5 | Apr 10, 2026 | Vector search (MiniLM-L6-v2 + RRF), knowledge graph, contradiction detection, fuzzy matching, atomic writes |
+| v7.0 | Apr 2026 | File-based storage (.md runbooks), FTS5 BM25, section-aware upsert, hard-block |
 | v6.0 | Mar 2026 | Migration from SQLite to filesystem, YAML frontmatter |
 | v5.0 | Feb 2026 | LRU cache, front-loading embedding, memory_list |
-| v1.0 | Nov 2025 | Base: search, get, upsert, forget, summarize |
+| v1.0 | Nov 2025 | Initial release: search, get, upsert, forget, summarize |
+
+## Author
+
+**sprindigo-art** — [GitHub](https://github.com/sprindigo-art)
 
 ## License
 

@@ -16,12 +16,12 @@ const lockDepth = new Map();
 
 function acquireLock(filepath) {
     const lockPath = filepath + '.lock';
-    const maxWaitMs = 5000;
+    const maxWaitMs = 15000;
     const start = Date.now();
     const depth = lockDepth.get(filepath) || 0;
     if (depth > 0) {
         lockDepth.set(filepath, depth + 1);
-        return;
+        return true;
     }
     while (true) {
         try {
@@ -29,16 +29,20 @@ function acquireLock(filepath) {
             writeFileSync(fd, String(process.pid));
             closeSync(fd);
             lockDepth.set(filepath, 1);
-            return;
+            return true;
         } catch (e) {
-            if (e.code !== 'EEXIST') { lockDepth.set(filepath, 1); return; }
+            if (e.code !== 'EEXIST') {
+                // EACCES/ENOSPC/EROFS — do NOT pretend lock acquired
+                try { logger.warn('acquireLock non-EEXIST error', { code: e.code, filepath: basename(filepath) }); } catch {}
+                return false;
+            }
         }
         try {
             const lockPid = readFileSync(lockPath, 'utf8').trim();
-            if (lockPid === String(process.pid)) { lockDepth.set(filepath, 1); return; }
+            if (lockPid === String(process.pid)) { lockDepth.set(filepath, 1); return true; }
         } catch {}
         let lockAge = maxWaitMs + 1;
-        try { lockAge = Date.now() - statSync(lockPath).mtimeMs; } catch { break; }
+        try { lockAge = Date.now() - statSync(lockPath).mtimeMs; } catch { continue; }
         if (lockAge > maxWaitMs || Date.now() - start > maxWaitMs) {
             try { unlinkSync(lockPath); } catch {}
             continue;
@@ -46,7 +50,6 @@ function acquireLock(filepath) {
         const until = Date.now() + 10;
         while (Date.now() < until) { /* spin */ }
     }
-    lockDepth.set(filepath, 1);
 }
 
 function releaseLock(filepath) {
@@ -228,36 +231,30 @@ function filterNoiseTags(tags) {
 }
 
 /**
- * SUB-HEADING patterns — NOT standalone sections, metadata within an entry.
- * Shared utility: used by memory.get (sections_list) AND memory.upsert (replace/append)
+ * WHITELIST of known major section name prefixes.
+ * Case-sensitive: proper sections use ALL CAPS (## CREDENTIAL, ## EXPLOIT, etc.)
+ * Inline entries use mixed case (## Credential, ## Credentials:) → NOT matched.
  */
-const SUB_HEADING_PATTERNS = [
-    /^target:/i,
-    /^date:/i,
-    /^status:/i,
-    /^outcome:/i,
-    /^source:/i,
-    /^step\s+\d/i,
-    /^type:/i,
-    /^tags:/i,
-    /^how to use/i,
-    /^commands?\s+executed/i,
+const MAJOR_SECTION_PREFIXES = [
+    'RECON', 'CREDENTIAL', 'EXPLOIT', 'GAGAL', 'LIVE STATUS',
+    'RE-ENTRY', 'RE-ENTRY CHECKLIST', 'SESSION LOG', '_AUTO_LOG', '_CHANGELOG', 'INFO',
 ];
 
 /**
  * Detect if a ## heading is a MAJOR section boundary or just a sub-heading.
- * BLACKLIST approach: ALL ## headings are major EXCEPT known sub-heading patterns.
+ * WHITELIST approach: only known ALL-CAPS section names are major.
  */
 export function isMajorSection(heading) {
     const clean = heading.replace(/^## /, '').trim();
     if (!clean) return false;
-    if (clean.startsWith('[')) return true;
-    if (clean.startsWith('---')) return true;
-    for (const pattern of SUB_HEADING_PATTERNS) {
-        if (pattern.test(clean)) return false;
+    for (const prefix of MAJOR_SECTION_PREFIXES) {
+        if (clean === prefix) return true;
+        if (clean.startsWith(prefix + ' &') || clean.startsWith(prefix + ' /') || clean.startsWith(prefix + '&') || clean.startsWith(prefix + '/')) return true;
     }
-    return true;
+    return false;
 }
+
+const MAJOR_SECTION_PATTERNS = MAJOR_SECTION_PREFIXES;
 
 /**
  * Find char offset where a section ENDS (next MAJOR ## heading or EOF).
@@ -297,6 +294,9 @@ export function appendToSection(body, sectionName, newContent) {
     const sectionHeader = sectionName.startsWith('## ') ? sectionName : `## ${sectionName}`;
     const escapedHeader = sectionHeader.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const headerRegex = new RegExp(`^${escapedHeader}`, 'im');
+
+    // Downgrade ## to ### in appended content — prevent creating false section boundaries
+    newContent = newContent.replace(/^## (?!RECON|CREDENTIAL|EXPLOIT|GAGAL|LIVE STATUS|RE-?ENTRY|SESSION LOG|_AUTO_LOG|_CHANGELOG|INFO\b)/gim, '### ');
 
     // FILE-WIDE exact match FIRST — before section existence check
     // Catches cross-section duplicates even when target section doesn't exist yet
@@ -911,9 +911,22 @@ function extractContextSnippet(body, queryWords, maxLen = 1200) {
     }
 
     // PRIORITY 2: Find section where MOST ORIGINAL query words co-occur
-    // Separate original words from expanded — original get 3x weight
+    // Split on MAJOR sections only (whitelist) — not all 1375 inline ## headers
     const originalWordsSet = new Set((queryWords._originalWords || queryWords).map(w => w.toLowerCase()));
-    const sections = body.split(/(?=^## )/m);
+    const sectionSplitRegex = /(?=^## )/m;
+    const rawSections = body.split(sectionSplitRegex);
+    // Merge non-major ## chunks into their parent major section
+    const sections = [];
+    let current = '';
+    for (const chunk of rawSections) {
+        if (chunk.startsWith('## ') && isMajorSection(chunk.split('\n')[0])) {
+            if (current) sections.push(current);
+            current = chunk;
+        } else {
+            current += (current ? '\n' : '') + chunk;
+        }
+    }
+    if (current) sections.push(current);
     let bestSection = null;
     let bestSectionScore = 0;
     let bestSectionName = '';
@@ -1345,7 +1358,7 @@ export function getStats() {
     };
 }
 
-export { filterNoiseTags, SUB_HEADING_PATTERNS };
+export { filterNoiseTags, MAJOR_SECTION_PATTERNS };
 
 export default {
     RUNBOOKS_DIR,

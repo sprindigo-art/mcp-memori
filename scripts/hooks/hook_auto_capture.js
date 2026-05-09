@@ -90,14 +90,13 @@ async function main() {
         const note = redactions > 0 ? ` [${redactions} redacted]` : '';
         const entry = cleaned + note;
 
-        // v8.5: Auto-detect target — only memory_upsert switches session target
-        // memory_get = reading for reference, NOT "I'm working on this target"
-        // memory_get only sets target if session has no target yet (first-time init)
+        // v8.6: Auto-detect target — switch on upsert OR when get targets a DIFFERENT runbook
+        // memory_get same target = no change. memory_get DIFFERENT target = switch (user changed focus)
         const detectedTarget = extractTargetFromToolCall(toolName, input.tool_input || input.input);
         if (detectedTarget && sessionId) {
             const isUpsert = toolName.toLowerCase().includes('memory_upsert');
             const existing = getSessionTarget(sessionId);
-            if (isUpsert || !existing) {
+            if (isUpsert || !existing || detectedTarget !== existing) {
                 setSessionTarget(sessionId, detectedTarget);
             }
         }
@@ -121,7 +120,7 @@ async function main() {
             tool_name: toolName
         });
 
-        const runbookId = target ? `RUNBOOK_${target.replace(/[^a-zA-Z0-9._-]/g, '_')}.md` : null;
+        const runbookId = logTarget ? `RUNBOOK_${logTarget.replace(/[^a-zA-Z0-9._-]/g, '_')}.md` : null;
         await writeObservation({
             runbook_id: runbookId,
             tool_name: toolName,
