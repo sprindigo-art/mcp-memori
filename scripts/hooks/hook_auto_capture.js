@@ -139,7 +139,7 @@ async function main() {
         counter = isWriteback ? 0 : counter + 1;
         try { writeFileSync(counterPath, String(counter)); } catch {}
 
-        if (counter >= 10) {
+        if (counter >= 10 && (counter === 10 || counter % 5 === 0)) {
             process.stdout.write(JSON.stringify({
                 hookSpecificOutput: {
                     hookEventName: 'PostToolUse',
