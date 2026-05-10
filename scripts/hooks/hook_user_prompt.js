@@ -37,8 +37,10 @@ function emptyOutput() {
  */
 function hasTargetSignal(prompt) {
     const lower = prompt.toLowerCase();
-    // Domain-like pattern (x.y.z or x.y)
-    if (/[a-z0-9][-a-z0-9]*\.[a-z]{2,}(?:\.[a-z]{2,})?/.test(lower)) return true;
+    // Domain-like pattern — exclude common file extensions and code identifiers
+    const domainMatch = lower.match(/[a-z0-9][-a-z0-9]*\.([a-z]{2,})(?:\.[a-z]{2,})?/);
+    const codeExts = new Set(['js','ts','py','md','json','css','html','sh','cjs','mjs','jsx','tsx','yaml','yml','toml','xml','sql','log','txt','cfg','ini','conf','bak','tmp','lock']);
+    if (domainMatch && !codeExts.has(domainMatch[1]) && !/^(exit|now|log|env|err|pid|url|parse|then|call|bind|keys|map|set|get|push|pop|test|exec|join|trim|send|emit|once|pipe)$/.test(domainMatch[1])) return true;
     // IP address
     if (/\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/.test(lower)) return true;
     // CVE

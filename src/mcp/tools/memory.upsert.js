@@ -646,10 +646,11 @@ export async function execute(params) {
                         const entryRegex = /^### .+$/gm;
                         let bestMatch = null;
                         let bestScore = 0;
+                        let secondBestScore = 0;
+                        let secondBestTitle = '';
                         let match;
                         while ((match = entryRegex.exec(body)) !== null) {
                             const entryTitle = match[0].replace(/^### /, '').trim().toLowerCase();
-                            // Score: exact match = 100, contains = 80, word overlap
                             let score = 0;
                             if (entryTitle === searchTitle) score = 100;
                             else if (entryTitle.includes(searchTitle)) score = 80;
@@ -661,8 +662,13 @@ export async function execute(params) {
                                 if (searchWords.length > 0) score = (overlap / searchWords.length) * 60;
                             }
                             if (score > bestScore) {
+                                secondBestScore = bestScore;
+                                secondBestTitle = bestMatch ? bestMatch.title : '';
                                 bestScore = score;
                                 bestMatch = { index: match.index, title: match[0] };
+                            } else if (score > secondBestScore) {
+                                secondBestScore = score;
+                                secondBestTitle = match[0];
                             }
                         }
 
@@ -672,6 +678,16 @@ export async function execute(params) {
                                 action: 'replace_entry_not_found',
                                 error: `No ### entry matching "${item.replace_entry}" found (best score: ${Math.round(bestScore)}).`,
                                 suggestion: 'Use append_to_section to create new entry instead.'
+                            });
+                            continue;
+                        }
+
+                        if (secondBestScore > 0 && bestScore < 100 && (bestScore - secondBestScore) < 15) {
+                            results.push({
+                                id: actualFilename, version: meta.version || 1, status: 'error',
+                                action: 'replace_entry_ambiguous',
+                                error: `Ambiguous match: "${bestMatch.title}" (score ${Math.round(bestScore)}) vs "${secondBestTitle}" (score ${Math.round(secondBestScore)}). Provide more specific title.`,
+                                candidates: [bestMatch.title, secondBestTitle]
                             });
                             continue;
                         }

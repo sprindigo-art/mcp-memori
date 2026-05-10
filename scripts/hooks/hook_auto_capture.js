@@ -90,14 +90,16 @@ async function main() {
         const note = redactions > 0 ? ` [${redactions} redacted]` : '';
         const entry = cleaned + note;
 
-        // v8.6: Auto-detect target — switch on upsert OR when get targets a DIFFERENT runbook
-        // memory_get same target = no change. memory_get DIFFERENT target = switch (user changed focus)
+        // v8.7: Auto-detect target — only switch on WRITE intent (upsert) or when no target set
+        // memory_get on different target = reference read, NOT a focus switch
         const detectedTarget = extractTargetFromToolCall(toolName, input.tool_input || input.input);
         if (detectedTarget && sessionId) {
             const isUpsert = toolName.toLowerCase().includes('memory_upsert');
             const existing = getSessionTarget(sessionId);
-            if (isUpsert || !existing || detectedTarget !== existing) {
+            if (isUpsert || !existing) {
                 setSessionTarget(sessionId, detectedTarget);
+            } else if (detectedTarget !== existing) {
+                hookLog('INFO', 'Cross-target reference read (not switching)', { active: existing, read: detectedTarget });
             }
         }
 

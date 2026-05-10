@@ -103,7 +103,8 @@ export const definition = {
             reason: { type: 'string', description: 'Alasan penghapusan' },
             remove_text: { type: 'string', description: 'Teks spesifik yang dihapus (sisanya tetap). Jika muncul >1x, harus set remove_all:true atau gagal.' },
             remove_section: { type: 'string', description: 'Section ## HEADER yang dihapus (sisanya tetap)' },
-            remove_all: { type: 'boolean', description: 'Jika true, hapus SEMUA occurrence remove_text. Default false (hanya boleh 1 occurrence).' }
+            remove_all: { type: 'boolean', description: 'Jika true, hapus SEMUA occurrence remove_text. Default false (hanya boleh 1 occurrence).' },
+            dry_run: { type: 'boolean', description: 'Jika true, tampilkan preview tanpa menulis/menghapus file. Gunakan untuk melihat efek delete sebelum commit.' }
         },
         required: ['id', 'reason']
     }
@@ -111,7 +112,7 @@ export const definition = {
 
 export async function execute(params) {
     const traceId = uuidv4();
-    const { id, reason, remove_text: removeText, remove_section: removeSection, remove_all: removeAll = false } = params;
+    const { id, reason, remove_text: removeText, remove_section: removeSection, remove_all: removeAll = false, dry_run: dryRun = false } = params;
 
     if (!id) {
         return { ok: false, meta: { trace_id: traceId, error: 'id required' } };
@@ -173,6 +174,17 @@ export async function execute(params) {
             }
 
             newBody = newBody.replace(/\n{3,}/g, '\n\n').trim();
+
+            if (dryRun) {
+                return {
+                    ok: true, action: 'dry_run_preview', dry_run: true,
+                    target_id: id, removed_chars: removedChars,
+                    remaining_length: newBody.length, original_length: body.length,
+                    preview_after: newBody.substring(0, 500),
+                    meta: { trace_id: traceId }
+                };
+            }
+
             meta.updated = new Date().toISOString();
             meta.version = (meta.version || 1) + 1;
             meta.last_edit = `Partial delete: ${reason}`;
@@ -195,6 +207,15 @@ export async function execute(params) {
         }
 
         // === FULL DELETE ===
+        if (dryRun) {
+            const raw = readFileSync(filepath, 'utf8');
+            return {
+                ok: true, action: 'dry_run_preview', dry_run: true,
+                target_id: id, would_delete: 'entire_runbook',
+                file_size: raw.length,
+                meta: { trace_id: traceId }
+            };
+        }
         const deleted = deleteRunbook(id, reason);
         if (deleted) {
             readConfirmations.delete(id);
