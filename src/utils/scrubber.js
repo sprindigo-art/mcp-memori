@@ -47,6 +47,18 @@ const PATTERNS = [
 
     // Cookie header values
     { re: /(Cookie|Set-Cookie):\s*[^\r\n]+/gi, replace: '$1: [REDACTED]' },
+
+    // sshpass -p (common in pentest runbooks)
+    { re: /sshpass\s+-p\s+['"]?\S+['"]?/gi, replace: 'sshpass -p [REDACTED]' },
+
+    // Standalone Bearer token (non-JWT, 20+ chars)
+    { re: /Bearer\s+\S{20,}/gi, replace: 'Bearer [REDACTED]' },
+
+    // -p "quoted password" (4+ chars inside quotes)
+    { re: /-p\s+['"][^'"]{4,}['"]/g, replace: '-p [REDACTED]' },
+
+    // Markdown table credential cells: | key | user | password_value | role |
+    { re: /(\|\s*(?:password|passwd|pass|pwd|secret|token|key)\s*\|\s*)\S{4,}(\s*\|)/gi, replace: '$1[REDACTED]$2' },
 ];
 
 /**

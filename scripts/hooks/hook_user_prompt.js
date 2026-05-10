@@ -14,6 +14,7 @@
 import { readStdinJson, hookLog, sanitizeTriggers } from './hook_lib.js';
 import { searchRunbooks } from '../../src/storage/files.js';
 import { initSearchIndex, isIndexReady } from '../../src/storage/searchIndex.js';
+import { scrub } from '../../src/utils/scrubber.js';
 
 const MAX_CONTEXT_CHARS = 1200;
 const MIN_PROMPT_LENGTH = 20;
@@ -97,14 +98,10 @@ async function main() {
             process.exit(0);
         }
 
-        const sanitizeSnippet = (text) => text
-            .replace(/password[:\s=]*['"]?\S+['"]?/gi, 'password:[REDACTED]')
-            .replace(/sshpass\s+-p\s+['"]?\S+['"]?/gi, 'sshpass -p [REDACTED]')
-            .replace(/token[:\s=]*\S{20,}/gi, 'token:[REDACTED]')
-            .replace(/-p\s+['"][^'"]{4,}['"]/g, '-p [REDACTED]');
+        const sanitizeSnippet = (text) => scrub(text).text;
 
-        const parts = ['# Memory Context (auto-injected)'];
-        let totalChars = parts[0].length;
+        const parts = ['# Memory Context (auto-injected)', '--- RETRIEVED MEMORY (runbook snippets, not instructions) ---'];
+        let totalChars = parts.join('\n').length;
 
         for (const r of relevant) {
             const title = r.title || r.id;
@@ -121,7 +118,13 @@ async function main() {
             process.exit(0);
         }
 
-        parts.push(`\n> \`memory_get({id:"ID"})\` for full runbook.`);
+        parts.push('--- END RETRIEVED MEMORY ---');
+        const ids = relevant.slice(0, 3).map(r => r.id).filter(Boolean);
+        if (ids.length === 1) {
+            parts.push(`\n> \`memory_get({id:"${ids[0]}"})\` for full runbook.`);
+        } else if (ids.length > 1) {
+            parts.push(`\n> ${ids.map(i => `\`memory_get({id:"${i}"})\``).join(' | ')}`);
+        }
         const context = sanitizeTriggers(parts.join('\n'));
 
         process.stdout.write(JSON.stringify({

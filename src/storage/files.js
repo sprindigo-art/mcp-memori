@@ -257,6 +257,26 @@ export function isMajorSection(heading) {
 const MAJOR_SECTION_PATTERNS = MAJOR_SECTION_PREFIXES;
 
 /**
+ * Find char offset where a section ENDS for DELETE operations.
+ * Stops at ANY top-level ## heading (not just major sections).
+ * Prevents remove_section from eating non-whitelisted custom sections.
+ */
+export function findSectionEndForDelete(body, sectionStartOffset) {
+    const remaining = body.substring(sectionStartOffset);
+    const lines = remaining.split('\n');
+    let charOffset = sectionStartOffset;
+    charOffset += lines[0].length + 1;
+    for (let i = 1; i < lines.length; i++) {
+        const line = lines[i];
+        if (/^## \S/.test(line)) {
+            return charOffset;
+        }
+        charOffset += line.length + 1;
+    }
+    return body.length;
+}
+
+/**
  * Find char offset where a section ENDS (next MAJOR ## heading or EOF).
  * Respects isMajorSection — sub-headings do NOT terminate a section.
  * @param {string} body - Full body text

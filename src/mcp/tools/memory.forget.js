@@ -3,7 +3,7 @@
  * Menolak penghapusan jika belum membaca full content via memory_get
  * @module mcp/tools/memory.forget
  */
-import { deleteRunbook, RUNBOOKS_DIR, parseFrontmatter, buildFrontmatter, atomicWriteFileSync, findSectionEnd, isMajorSection } from '../../storage/files.js';
+import { deleteRunbook, RUNBOOKS_DIR, parseFrontmatter, buildFrontmatter, atomicWriteFileSync, findSectionEnd, findSectionEndForDelete, isMajorSection } from '../../storage/files.js';
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { v4 as uuidv4 } from 'uuid';
@@ -101,8 +101,9 @@ export const definition = {
         properties: {
             id: { type: 'string', description: 'Runbook filename' },
             reason: { type: 'string', description: 'Alasan penghapusan' },
-            remove_text: { type: 'string', description: 'Teks spesifik yang dihapus (sisanya tetap)' },
-            remove_section: { type: 'string', description: 'Section ## HEADER yang dihapus (sisanya tetap)' }
+            remove_text: { type: 'string', description: 'Teks spesifik yang dihapus (sisanya tetap). Jika muncul >1x, harus set remove_all:true atau gagal.' },
+            remove_section: { type: 'string', description: 'Section ## HEADER yang dihapus (sisanya tetap)' },
+            remove_all: { type: 'boolean', description: 'Jika true, hapus SEMUA occurrence remove_text. Default false (hanya boleh 1 occurrence).' }
         },
         required: ['id', 'reason']
     }
@@ -110,7 +111,7 @@ export const definition = {
 
 export async function execute(params) {
     const traceId = uuidv4();
-    const { id, reason, remove_text: removeText, remove_section: removeSection } = params;
+    const { id, reason, remove_text: removeText, remove_section: removeSection, remove_all: removeAll = false } = params;
 
     if (!id) {
         return { ok: false, meta: { trace_id: traceId, error: 'id required' } };
@@ -143,8 +144,17 @@ export async function execute(params) {
                     return { ok: false, message: 'Teks tidak ditemukan di runbook. Pastikan exact match.', meta: { trace_id: traceId } };
                 }
                 const occurrences = body.split(removeText).length - 1;
-                newBody = body.replaceAll(removeText, '');
-                removedChars = removeText.length * occurrences;
+                if (occurrences > 1 && !removeAll) {
+                    return {
+                        ok: false,
+                        action: 'ambiguous_multiple_occurrences',
+                        occurrences,
+                        error: `Text found ${occurrences} times across runbook. Set remove_all:true to delete all, or provide more specific text to match exactly 1 occurrence.`,
+                        meta: { trace_id: traceId }
+                    };
+                }
+                newBody = removeAll ? body.replaceAll(removeText, '') : body.replace(removeText, '');
+                removedChars = removeText.length * (removeAll ? occurrences : 1);
             }
 
             if (removeSection) {
@@ -156,7 +166,7 @@ export async function execute(params) {
                     return { ok: false, message: `Section "${removeSection}" tidak ditemukan.`, meta: { trace_id: traceId } };
                 }
                 const sectionStart = headerMatch.index;
-                const sectionEnd = findSectionEnd(newBody, sectionStart);
+                const sectionEnd = findSectionEndForDelete(newBody, sectionStart);
                 const removedText = newBody.substring(sectionStart, sectionEnd);
                 newBody = newBody.substring(0, sectionStart) + newBody.substring(sectionEnd);
                 removedChars += removedText.length;
