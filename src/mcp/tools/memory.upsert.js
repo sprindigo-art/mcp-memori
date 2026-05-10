@@ -11,6 +11,7 @@ import { join, basename } from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { createHash } from 'crypto';
 import { hasBeenRead, getReadStatus } from './memory.forget.js';
+import { routeMemoryType } from '../../utils/memoryTypeRouter.js';
 import { invalidateGetCache } from './memory.get.js';
 import { updateIndexEntry } from '../../storage/searchIndex.js';
 import { updateVectorEntry } from '../../storage/vectorIndex.js';
@@ -101,7 +102,8 @@ export const definition = {
                         replace_text: { type: 'string', description: 'Find this exact text in the runbook and replace it with content. Like Edit tool — surgical edit without replacing entire section. Text must be unique in the file.' },
                         replace_entry: { type: 'string', description: 'Replace a ### entry by its title (fuzzy match). Finds the ### heading that best matches this string and replaces everything from that ### to the next ### or ## with new content. Use when updating existing entry with newer data (e.g. "dbcluster1 MySQL ROOT" to update old entry about dbcluster1).' },
                         append_to_section: { type: 'string', description: 'Append content to END of specific ## section (preserving ALL existing content in that section). Section name without ## prefix (e.g. "CREDENTIAL", "GAGAL", "EXPLOIT"). If section not found, creates it. RECOMMENDED over replace_section for adding entries.' },
-                        auto_dual_save: { type: 'boolean', description: 'If true, auto-save failures to Kesalahan Universal + successes to Teknik Berhasil Universal. Default: false. Only set true when you want cross-target learning.' }
+                        auto_dual_save: { type: 'boolean', description: 'If true, auto-save failures to Kesalahan Universal + successes to Teknik Berhasil Universal. Default: false. Only set true when you want cross-target learning.' },
+                        memory_type: { type: 'string', description: 'Auto-route to correct section: credential, exploit_success, exploit_failure, status, recon, todo, blocker, command, lesson, decision, environment. Only used when append_to_section/replace_section/replace_text/replace_entry are NOT set.' }
                     },
                     required: ['title', 'content']
                 },
@@ -407,6 +409,21 @@ export async function execute(params) {
                         + `Baru boleh upsert setelah benar-benar PAHAM isi runbook.`
                 });
                 continue;
+            }
+
+            // === MEMORY_TYPE AUTO-ROUTING (v8.7) ===
+            // If memory_type is set but no explicit write mode, route to correct section automatically
+            if (item.memory_type && !item.append_to_section && !item.replace_section && !item.replace_text && !item.replace_entry) {
+                const route = routeMemoryType(item.memory_type);
+                if (route && route.error) {
+                    results.push({ id: actualFilename, version: 0, status: 'error', action: 'invalid_memory_type', error: route.error });
+                    continue;
+                }
+                if (route) {
+                    if (route.mode === 'replace_section') item.replace_section = route.section;
+                    else item.append_to_section = route.section;
+                    if (route.dual_save && item.auto_dual_save === undefined) item.auto_dual_save = true;
+                }
             }
 
             // === APPEND TO SECTION MODE: Tambah content ke END of section yang benar ===

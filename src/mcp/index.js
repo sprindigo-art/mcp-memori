@@ -12,6 +12,7 @@ import statsTool from './tools/memory.stats.js';
 import listTool from './tools/memory.list.js';
 import autologTool from './tools/memory.autolog.js';
 import timelineTool from './tools/memory.timeline.js';
+import verifyTool from './tools/memory.verify.js';
 
 /**
  * All available tools (9 tools — v8.0 added memory_timeline for chronological context)
@@ -25,7 +26,8 @@ export const tools = {
     'memory_stats': statsTool,
     'memory_list': listTool,
     'memory_autolog': autologTool,
-    'memory_timeline': timelineTool
+    'memory_timeline': timelineTool,
+    'memory_verify': verifyTool
 };
 
 /**
