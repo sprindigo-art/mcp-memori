@@ -19,7 +19,7 @@ import { fileURLToPath } from 'url';
 import { readStdinJson, hookLog, resolveActiveTarget, clearSessionTarget } from './hook_lib.js';
 import {
     RUNBOOKS_DIR, titleToFilename, findByTitle, findByFuzzyTitle,
-    parseFrontmatter, findSectionEnd, acquireLock, releaseLock
+    parseFrontmatter, findSectionEnd, acquireLock, releaseLock, atomicWriteFileSync, buildFrontmatter
 } from '../../src/storage/files.js';
 
 const LOOKBACK_HOURS = 4;
@@ -227,11 +227,9 @@ async function main() {
                 }
             }
 
-            const { writeFileSync: wfs } = await import('fs');
-            const { buildFrontmatter } = await import('../../src/storage/files.js');
             meta.updated = new Date().toISOString();
             const finalContent = buildFrontmatter(meta) + newBody.trim() + '\n';
-            wfs(filepath, finalContent, 'utf8');
+            atomicWriteFileSync(filepath, finalContent, 'utf8');
 
             hookLog('INFO', 'Stop: session summary written', { target, entries: entries.length, summary_len: summary.length });
         } finally {

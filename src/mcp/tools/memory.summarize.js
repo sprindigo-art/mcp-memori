@@ -12,10 +12,8 @@ export const definition = {
     inputSchema: {
         type: 'object',
         properties: {
-            project_id: { type: 'string', description: 'Project ID' },
             compact: { type: 'boolean', description: 'Compact mode (default: false)' }
-        },
-        required: ['project_id']
+        }
     }
 };
 

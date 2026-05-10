@@ -12,18 +12,12 @@ export const definition = {
     inputSchema: {
         type: 'object',
         properties: {
-            project_id: { type: 'string', description: 'Project ID' },
             tags: { type: 'array', items: { type: 'string' }, description: 'Filter by tags (AND logic)' },
             limit: { type: 'number', description: 'Max results per page (default: 20)' },
             offset: { type: 'number', description: 'Offset for pagination (default: 0)' },
             title_contains: { type: 'string', description: 'Filter by title substring' },
-            full_content: { type: 'boolean', description: 'Return full content (default: false)' },
-            types: { type: 'array', items: { type: 'string' }, description: 'Ignored — all items are runbooks' },
-            status: { type: 'string', description: 'Ignored — all items are active' },
-            sort_by: { type: 'string', description: 'Ignored — sorted by updated_at desc' },
-            sort_order: { type: 'string', description: 'Ignored' }
-        },
-        required: ['project_id']
+            full_content: { type: 'boolean', description: 'Return full content (default: false)' }
+        }
     }
 };
 

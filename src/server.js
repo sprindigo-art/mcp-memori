@@ -196,6 +196,10 @@ class McpServer {
                 isError: false
             };
 
+            if (toolResult?._raw) {
+                result.structuredContent = toolResult._raw;
+            }
+
             this.sendResult(id, result);
         } catch (err) {
             // Return tool execution error as a result with isError=true (not JSON-RPC error)

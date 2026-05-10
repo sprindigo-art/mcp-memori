@@ -198,18 +198,13 @@ export const definition = {
         type: 'object',
         properties: {
             query: { type: 'string', description: 'Search query' },
-            project_id: { type: 'string', description: 'Project ID' },
             tags: { type: 'array', items: { type: 'string' }, description: 'Filter by tags (OR logic)' },
             required_tags: { type: 'array', items: { type: 'string' }, description: 'Mandatory tags (AND logic)' },
             limit: { type: 'number', description: 'Max results (default: 20)' },
             offset: { type: 'number', description: 'Offset for pagination (default: 0)' },
-            full_content: { type: 'boolean', description: 'Return full content instead of snippet (default: false)' },
-            scope_id: { type: 'string', description: 'Scope search to ONE specific runbook file' },
-            types: { type: 'array', items: { type: 'string' }, description: 'Ignored — all items are runbooks' },
-            override_quarantine: { type: 'boolean', description: 'Ignored — no quarantine in file mode' },
-            allow_relations: { type: 'boolean', description: 'Ignored — no graph in file mode' }
+            scope_id: { type: 'string', description: 'Scope search to ONE specific runbook file' }
         },
-        required: ['query', 'project_id']
+        required: ['query']
     }
 };
 
@@ -442,30 +437,32 @@ export async function execute(params) {
             outLines.push('');
         }
         if (rawPagination.total > offset + limit) {
-            outLines.push(`> **Next page:** memory_search({query:"${searchQuery}", offset:${offset + limit}, project_id:"..."})`);
+            outLines.push(`> **Next page:** memory_search({query:"${searchQuery}", offset:${offset + limit}})`);
         }
-        outLines.push(`> **Baca:** memory_get({id:"ID"}) — **Per section:** memory_get({id:"...", section:"NAMA_SECTION"})`);
+        const firstId = compactResults.length > 0 ? compactResults[0].id : null;
+        if (firstId) {
+            outLines.push(`> **Baca:** memory_get({id:"${firstId}"}) — **Per section:** memory_get({id:"${firstId}", section:"NAMA_SECTION"})`);
+        }
+
+        const structuredResults = compactResults.map(item => {
+            const next_call = { tool: 'memory_get', arguments: { id: item.id } };
+            return { id: item.id, title: item.title, score: item.score, snippet: item.snippet, next_call };
+        });
 
         return {
             __plaintext: true,
             text: outLines.join('\n'),
             _raw: {
-                results: compactResults,
-                pagination: {
-                    total: rawPagination.total,
-                    offset,
-                    limit,
-                    returned: paginated.length,
-                    has_more: offset + limit < rawPagination.total
-                },
+                query: searchQuery,
+                offset,
+                limit,
+                returned: paginated.length,
+                total: rawPagination.total,
+                results: structuredResults,
                 meta: {
                     trace_id: traceId,
-                    count: paginated.length,
                     storage: 'filesystem',
-                    reranked: true,
-                    query_expanded: true,
-                    vector_used: vectorUsed,
-                    vector_results: vectorResults.length
+                    vector_used: vectorUsed
                 }
             }
         };

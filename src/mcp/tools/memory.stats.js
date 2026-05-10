@@ -14,10 +14,7 @@ export const definition = {
     description: 'Statistik runbook files: total, size, tags breakdown',
     inputSchema: {
         type: 'object',
-        properties: {
-            project_id: { type: 'string', description: 'Project ID' },
-            sections: { type: 'array', items: { type: 'string' }, description: 'Ignored — returns all stats' }
-        }
+        properties: {}
     }
 };
 
