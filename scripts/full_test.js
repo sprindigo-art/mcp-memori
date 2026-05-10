@@ -191,7 +191,7 @@ agar aman dan deterministik.`,
                 content: `Langkah:
 1. Gunakan memory_upsert untuk menyimpan memori.
 2. Gunakan memory_search untuk mengambil memori.
-3. Gunakan memory_summarize saat sesi baru.
+3. Gunakan memory_stats saat sesi baru.
 Expected output: memori konsisten lintas sesi.`,
                 tags: ['runbook', 'benar'],
                 verified: true,
@@ -229,30 +229,26 @@ Expected output: memori konsisten lintas sesi.`,
             fail('PHASE 2', 'Multiple results returned', `Hanya ${searchResult.results?.length || 0} hasil`);
         }
 
-        // 5. Summarize
-        const summaryResult = await client.toolCall('memory_summarize', {
-            project_id: PROJECT_ID
-        });
+        // 5. Stats (replaced memory_summarize — removed as redundant)
+        const statsResult = await client.toolCall('memory_stats', {});
 
-        log('PHASE 2', `Summarize: ${JSON.stringify(Object.keys(summaryResult))}`);
-        if (summaryResult.state_latest?.title) {
-            pass('PHASE 2', 'summarize mengembalikan state_latest');
+        log('PHASE 2', `Stats: total_runbooks=${statsResult.total_runbooks}`);
+        if (statsResult.total_runbooks >= 1) {
+            pass('PHASE 2', 'stats mengembalikan runbook count');
         } else {
-            fail('PHASE 2', 'summarize mengembalikan state_latest', 'Tidak ada state_latest');
+            fail('PHASE 2', 'stats mengembalikan runbook count', 'Tidak ada runbooks');
         }
 
         // ==================== PHASE 3 ====================
         log('PHASE 3', '=== AMNESIA TEST (SESI BARU) ===');
 
-        // 6. Summarize tanpa konteks
-        const summaryResult2 = await client.toolCall('memory_summarize', {
-            project_id: PROJECT_ID
-        });
+        // 6. Stats tanpa konteks — verify persistence
+        const statsResult2 = await client.toolCall('memory_stats', {});
 
-        if (summaryResult2.state_latest?.content?.includes('menguji MCP Memory')) {
-            pass('PHASE 3', 'State persisten setelah "sesi baru"');
+        if (statsResult2.total_runbooks >= 1) {
+            pass('PHASE 3', 'Stats persisten setelah "sesi baru"');
         } else {
-            fail('PHASE 3', 'State persisten setelah "sesi baru"', 'Content tidak matching');
+            fail('PHASE 3', 'Stats persisten setelah "sesi baru"', 'Tidak ada runbooks');
         }
 
         // ==================== PHASE 4 ====================

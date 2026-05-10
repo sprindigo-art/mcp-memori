@@ -36,7 +36,6 @@ describe('P1-B.2: Dead parameters removed from schemas', () => {
     const search = readFileSync('/home/kali/Desktop/mcp-memori/src/mcp/tools/memory.search.js', 'utf8');
     const list = readFileSync('/home/kali/Desktop/mcp-memori/src/mcp/tools/memory.list.js', 'utf8');
     const stats = readFileSync('/home/kali/Desktop/mcp-memori/src/mcp/tools/memory.stats.js', 'utf8');
-    const summarize = readFileSync('/home/kali/Desktop/mcp-memori/src/mcp/tools/memory.summarize.js', 'utf8');
 
     it('memory_search: no project_id in required', () => {
         assert.ok(!search.includes("required: ['query', 'project_id']"), 'project_id must not be required');
@@ -60,10 +59,6 @@ describe('P1-B.2: Dead parameters removed from schemas', () => {
 
     it('memory_stats: dead params removed', () => {
         assert.ok(!stats.includes('sections'), 'sections must be removed');
-    });
-
-    it('memory_summarize: no project_id required', () => {
-        assert.ok(!summarize.includes("required: ['project_id']"), 'project_id must not be required');
     });
 
     it('execute functions tolerate extra project_id from old clients', () => {

@@ -659,15 +659,27 @@ export async function execute(params) {
                         const { meta, body } = parseFrontmatter(raw);
                         const searchTitle = item.replace_entry.replace(/^###\s*/, '').trim().toLowerCase();
 
-                        // Find ### entry by fuzzy title match
-                        const entryRegex = /^### .+$/gm;
+                        // Find ### entry by fuzzy title match (also catches mid-line ### from malformed appends)
+                        const entryRegex = /^###\s+.+$/gm;
+                        const midLineRegex = /(?<=.)###\s+.+$/gm;
+                        const allMatches = [];
+                        let match;
+                        while ((match = entryRegex.exec(body)) !== null) {
+                            allMatches.push({ index: match.index, header: match[0].trim() });
+                        }
+                        while ((match = midLineRegex.exec(body)) !== null) {
+                            const header = match[0].trim();
+                            if (!allMatches.some(m => m.header === header && Math.abs(m.index - match.index) < header.length + 5)) {
+                                allMatches.push({ index: match.index, header });
+                            }
+                        }
+
                         let bestMatch = null;
                         let bestScore = 0;
                         let secondBestScore = 0;
                         let secondBestTitle = '';
-                        let match;
-                        while ((match = entryRegex.exec(body)) !== null) {
-                            const entryTitle = match[0].replace(/^### /, '').trim().toLowerCase();
+                        for (const entry of allMatches) {
+                            const entryTitle = entry.header.replace(/^###\s+/, '').trim().toLowerCase();
                             let score = 0;
                             if (entryTitle === searchTitle) score = 100;
                             else if (entryTitle.includes(searchTitle)) score = 80;
@@ -682,10 +694,10 @@ export async function execute(params) {
                                 secondBestScore = bestScore;
                                 secondBestTitle = bestMatch ? bestMatch.title : '';
                                 bestScore = score;
-                                bestMatch = { index: match.index, title: match[0] };
+                                bestMatch = { index: entry.index, title: entry.header };
                             } else if (score > secondBestScore) {
                                 secondBestScore = score;
-                                secondBestTitle = match[0];
+                                secondBestTitle = entry.header;
                             }
                         }
 
@@ -718,7 +730,11 @@ export async function execute(params) {
 
                         const oldEntry = body.substring(bestMatch.index, entryEnd);
                         const now = new Date().toISOString().split('T')[0];
-                        const newEntry = `### ${item.replace_entry.replace(/^###\s*/, '').trim()} (updated ${now})\n${content}`;
+                        const cleanTitle = item.replace_entry.replace(/^###\s*/, '').trim();
+                        const contentStartsWithHeader = /^###\s+/.test(content.trim());
+                        const newEntry = contentStartsWithHeader
+                            ? content.trim()
+                            : `### ${cleanTitle} (updated ${now})\n${content}`;
                         const newBody = body.substring(0, bestMatch.index) + newEntry + '\n' + body.substring(entryEnd);
 
                         meta.version = (meta.version || 1) + 1;

@@ -4,19 +4,25 @@
  * NEVER writes files, updates indexes, or changes active target.
  * @module mcp/tools/memory.verify
  */
-import { readRunbook, searchRunbooks, parseFrontmatter, findSectionEnd, isMajorSection, RUNBOOKS_DIR } from '../../storage/files.js';
+import { readRunbook, searchRunbooks, parseFrontmatter, findSectionEnd, isMajorSection, titleToFilename, RUNBOOKS_DIR } from '../../storage/files.js';
 import { scrub } from '../../utils/scrubber.js';
+import { readdirSync } from 'fs';
+import { basename } from 'path';
 import logger from '../../utils/logger.js';
 
 const CONTRADICTION_PAIRS = [
     ['alive', 'dead'], ['dead', 'alive'],
     ['patched', 'vulnerable'], ['vulnerable', 'patched'],
     ['open', 'closed'], ['closed', 'open'],
-    ['up', 'down'], ['running', 'stopped'],
+    ['up', 'down'], ['down', 'up'], ['running', 'stopped'], ['stopped', 'running'],
     ['valid', 'invalid'], ['invalid', 'valid'],
-    ['success', 'failed'], ['berhasil', 'gagal'], ['gagal', 'berhasil'],
+    ['success', 'failed'], ['failed', 'success'],
+    ['berhasil', 'gagal'], ['gagal', 'berhasil'],
+    ['failed', 'berhasil'], ['berhasil', 'failed'],
+    ['success', 'gagal'], ['gagal', 'success'],
     ['accessible', 'unreachable'], ['unreachable', 'accessible'],
-    ['enabled', 'disabled'], ['root', 'unprivileged'],
+    ['enabled', 'disabled'], ['disabled', 'enabled'],
+    ['root', 'unprivileged'], ['unprivileged', 'root'],
 ];
 
 function checkExact(body, claim) {
@@ -87,6 +93,71 @@ function detectSection(body, offset) {
     return headerMatch ? headerMatch[1].trim() : 'UNKNOWN';
 }
 
+function resolveTarget(target) {
+    const files = readdirSync(RUNBOOKS_DIR).filter(f => f.endsWith('.md'));
+    const targetLower = target.toLowerCase().trim();
+
+    // A. Exact filename match (e.g. "RUNBOOK_target.md" or "TEKNIK_foo.md")
+    if (files.includes(target)) {
+        return { id: target, method: 'exact_filename' };
+    }
+    const withMd = target.endsWith('.md') ? target : target + '.md';
+    if (files.includes(withMd)) {
+        return { id: withMd, method: 'exact_filename' };
+    }
+
+    // B. Normalized title→filename match
+    const fromTitle = titleToFilename(`[RUNBOOK] ${target}`);
+    if (files.includes(fromTitle)) {
+        return { id: fromTitle, method: 'title_to_filename' };
+    }
+    const fromTeknik = titleToFilename(`[TEKNIK] ${target}`);
+    if (files.includes(fromTeknik)) {
+        return { id: fromTeknik, method: 'title_to_filename_teknik' };
+    }
+
+    // C. Substring match on filename — RUNBOOK preferred over TEKNIK
+    const runbookMatches = [];
+    const teknikMatches = [];
+    for (const f of files) {
+        const fLower = f.toLowerCase();
+        if (fLower.includes(targetLower.replace(/[\s.]+/g, '_'))) {
+            if (fLower.startsWith('runbook_')) runbookMatches.push(f);
+            else if (fLower.startsWith('teknik_')) teknikMatches.push(f);
+            else runbookMatches.push(f);
+        }
+    }
+
+    // D. RUNBOOK match wins over TEKNIK for domain/IP/target-like inputs
+    if (runbookMatches.length === 1) {
+        return { id: runbookMatches[0], method: 'filename_substring_runbook' };
+    }
+    if (runbookMatches.length > 1) {
+        return { id: runbookMatches[0], method: 'filename_substring_runbook_first', candidates: runbookMatches.slice(0, 3) };
+    }
+
+    // E. TEKNIK only if no RUNBOOK match and target explicitly looks like technique
+    const isTeknikQuery = targetLower.startsWith('teknik') || targetLower.includes('[teknik]');
+    if (teknikMatches.length === 1 && (isTeknikQuery || runbookMatches.length === 0)) {
+        return { id: teknikMatches[0], method: 'filename_substring_teknik' };
+    }
+    if (teknikMatches.length > 1 && isTeknikQuery) {
+        return { id: teknikMatches[0], method: 'filename_substring_teknik_first', candidates: teknikMatches.slice(0, 3) };
+    }
+
+    // F. Fallback to searchRunbooks — but prefer RUNBOOK over TEKNIK in results
+    const searchResults = searchRunbooks(target, { limit: 5 });
+    if (searchResults.results && searchResults.results.length > 0) {
+        const runbookHit = searchResults.results.find(r => r.id.toLowerCase().startsWith('runbook_'));
+        if (runbookHit) {
+            return { id: runbookHit.id, method: 'search_prefer_runbook' };
+        }
+        return { id: searchResults.results[0].id, method: 'search_fallback' };
+    }
+
+    return { id: null, method: 'not_found' };
+}
+
 export const definition = {
     name: 'memory_verify',
     description: 'Read-only pre-write check: apakah data sudah ada, duplikat, bertentangan, atau stale? Gunakan SEBELUM memory_upsert untuk mencegah duplikat dan konflik. Tidak menulis file.',
@@ -113,11 +184,13 @@ export async function execute(params) {
     try {
         let runbookId = null;
         let body = '';
+        let resolutionMethod = 'none';
 
         if (target) {
-            const searchResults = searchRunbooks(target, { limit: 3 });
-            if (searchResults.results && searchResults.results.length > 0) {
-                runbookId = searchResults.results[0].id;
+            const resolved = resolveTarget(target);
+            runbookId = resolved.id;
+            resolutionMethod = resolved.method;
+            if (runbookId) {
                 const rb = readRunbook(runbookId);
                 if (rb) body = rb.content || '';
             }
@@ -125,6 +198,7 @@ export async function execute(params) {
             const searchResults = searchRunbooks(claim, { limit: 3 });
             if (searchResults.results && searchResults.results.length > 0) {
                 runbookId = searchResults.results[0].id;
+                resolutionMethod = 'search_by_claim';
                 const rb = readRunbook(runbookId);
                 if (rb) body = rb.content || '';
             }
@@ -135,6 +209,7 @@ export async function execute(params) {
                 ok: true,
                 verdict: 'new',
                 target_id: null,
+                target_resolution: { method: resolutionMethod },
                 check,
                 evidence: { matching_entries: [], contradiction_detail: null, staleness_detail: null },
                 recommended_action: { action: 'append', tool: 'memory_upsert', arguments: {} },
@@ -159,6 +234,7 @@ export async function execute(params) {
             ok: true,
             verdict: 'new',
             target_id: runbookId,
+            target_resolution: { method: resolutionMethod },
             check,
             evidence: { matching_entries: [], contradiction_detail: null, staleness_detail: null },
             recommended_action: { action: 'append', tool: 'memory_upsert', arguments: {} },

@@ -7,7 +7,6 @@ import searchTool from './tools/memory.search.js';
 import getTool from './tools/memory.get.js';
 import upsertTool from './tools/memory.upsert.js';
 import forgetTool from './tools/memory.forget.js';
-import summarizeTool from './tools/memory.summarize.js';
 import statsTool from './tools/memory.stats.js';
 import listTool from './tools/memory.list.js';
 import autologTool from './tools/memory.autolog.js';
@@ -15,14 +14,13 @@ import timelineTool from './tools/memory.timeline.js';
 import verifyTool from './tools/memory.verify.js';
 
 /**
- * All available tools (9 tools — v8.0 added memory_timeline for chronological context)
+ * All available tools (9 tools — memory_summarize removed: redundant with stats+list)
  */
 export const tools = {
     'memory_search': searchTool,
     'memory_get': getTool,
     'memory_upsert': upsertTool,
     'memory_forget': forgetTool,
-    'memory_summarize': summarizeTool,
     'memory_stats': statsTool,
     'memory_list': listTool,
     'memory_autolog': autologTool,

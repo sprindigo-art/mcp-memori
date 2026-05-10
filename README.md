@@ -141,7 +141,6 @@ Query → ┌─ FTS5 BM25 (noise-filtered, porter stemmer) ─────┐
 | `memory_forget` | Delete text, section, or entire runbook (read-before-delete enforced) |
 | `memory_list` | Browse all runbooks with tag/title filter and pagination |
 | `memory_stats` | Storage statistics: total files, size, tag breakdown |
-| `memory_summarize` | Project-level summary from all runbooks |
 | `memory_autolog` | Internal: auto-append tool call journal to `_AUTO_LOG` |
 | `memory_timeline` | Chronological context viewer around events (DB or runbook based) |
 
@@ -320,7 +319,6 @@ mcp-memori/
 │   │       ├── memory.forget.js   # Partial/full delete, read-before-delete
 │   │       ├── memory.list.js     # Browse/filter/paginate
 │   │       ├── memory.stats.js    # Statistics
-│   │       ├── memory.summarize.js
 │   │       ├── memory.autolog.js  # Hook-driven auto-capture journal
 │   │       └── memory.timeline.js # Chronological context viewer
 │   ├── storage/
@@ -420,7 +418,7 @@ Research across 30 documented Claude Code memory weaknesses (sources: GitHub iss
 | v7.0 | Apr 2026 | File-based storage (.md runbooks), FTS5 BM25, section-aware upsert, hard-block |
 | v6.0 | Mar 2026 | Migration from SQLite to filesystem, YAML frontmatter |
 | v5.0 | Feb 2026 | LRU cache, front-loading embedding, memory_list |
-| v1.0 | Nov 2025 | Initial release: search, get, upsert, forget, summarize |
+| v1.0 | Nov 2025 | Initial release: search, get, upsert, forget, summarize (removed v8.7) |
 
 ## Author
 

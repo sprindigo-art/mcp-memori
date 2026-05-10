@@ -153,7 +153,6 @@ mcp-memori/
 │   │       ├── memory.forget.js   # Delete/remove
 │   │       ├── memory.list.js     # List all runbooks
 │   │       ├── memory.stats.js    # Statistics
-│   │       ├── memory.summarize.js
 │   │       ├── memory.autolog.js  # Auto-log tool
 │   │       └── memory.timeline.js # Timeline tool
 │   ├── storage/
