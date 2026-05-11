@@ -599,16 +599,31 @@ export async function execute(params) {
                         const { meta, body } = parseFrontmatter(raw);
                         const sectionHeader = item.replace_section.startsWith('##') ? item.replace_section : `## ${item.replace_section}`;
                         const escapedHeader = sectionHeader.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                        const headerRegex = new RegExp(`^${escapedHeader}`, 'im');
+                        const headerRegex = new RegExp(`^${escapedHeader}(?:\\s*$|\\s+&)`, 'im');
                         const headerMatch = headerRegex.exec(body);
 
                         let newBody;
                         if (headerMatch) {
                             const sectionStart = headerMatch.index;
-                            const sectionEnd = findSectionEnd(body, sectionStart);
+                            let sectionEnd = findSectionEnd(body, sectionStart);
+
+                            // Consolidate duplicate section headers (e.g. 2+ ## LIVE STATUS from legacy/bug)
+                            const scanRegex = new RegExp(`^${escapedHeader}(?:\\s*$|\\s+&)`, 'gim');
+                            let dupMatch;
+                            while ((dupMatch = scanRegex.exec(body)) !== null) {
+                                if (dupMatch.index > sectionStart) {
+                                    const dupEnd = findSectionEnd(body, dupMatch.index);
+                                    if (dupEnd > sectionEnd) sectionEnd = dupEnd;
+                                }
+                            }
+
                             const oldSection = body.substring(sectionStart, sectionEnd);
 
-                            newBody = body.substring(0, sectionStart) + `${sectionHeader}\n${content}\n\n` + body.substring(sectionEnd);
+                            // Strip duplicate section header from content if user included it
+                            const contentHeaderRegex = new RegExp(`^##\\s+${item.replace_section.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\n`, 'i');
+                            const cleanContent = content.replace(contentHeaderRegex, '');
+
+                            newBody = body.substring(0, sectionStart) + `${sectionHeader}\n${cleanContent}\n\n` + body.substring(sectionEnd);
                             logger.info('SECTION REPLACED', { filename: actualFilename, section: item.replace_section, old_size: oldSection.length, new_size: content.length });
 
                             const now = new Date().toISOString().split('T')[0];

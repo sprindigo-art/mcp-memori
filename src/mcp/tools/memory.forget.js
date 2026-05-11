@@ -58,7 +58,8 @@ export function confirmRead(id, mode = 'full', charsRead = 0) {
 
 /**
  * Cek apakah runbook sudah dibaca CUKUP untuk upsert dalam 10 menit terakhir
- * Requirement: FULL read ATAU (sections_list + minimal 1 section content read)
+ * v8.8: Require FULL read (tanpa section param) atau paginated full read
+ * Section-only read TIDAK lagi unlock — harus full read dulu
  */
 export function hasBeenRead(id) {
     const entry = readConfirmations.get(id);
@@ -66,17 +67,14 @@ export function hasBeenRead(id) {
     const tenMinutes = 10 * 60 * 1000;
     if ((Date.now() - entry.timestamp) >= tenMinutes) return false;
 
-    // FULL read = OK
+    // FULL read (tanpa section parameter) = OK
     if (entry.fullRead || entry.mode === 'full') return true;
 
-    // sections_list ALONE = NOT enough (hanya lihat heading)
-    if (entry.mode === 'sections_list' && (!entry.sectionsRead || entry.sectionsRead < 1)) return false;
+    // sections_list ALONE = NOT enough
+    if (entry.mode === 'sections_list') return false;
 
-    // section read with SUBSTANTIAL content = OK (was 100, too low — baca 1 section kecil = unlock semua)
-    if (entry.mode === 'section' && entry.charsRead > 500) return true;
-
-    // sections_list + at least 2 section content reads with substantial chars = OK
-    if (entry.sectionsRead >= 2 && entry.charsRead > 500) return true;
+    // Section-only read: require at least 3 different sections read with >2000 chars total
+    if (entry.mode === 'section' && entry.sectionsRead >= 3 && entry.charsRead > 2000) return true;
 
     return false;
 }
@@ -161,7 +159,7 @@ export async function execute(params) {
             if (removeSection) {
                 const sectionHeader = removeSection.startsWith('##') ? removeSection : `## ${removeSection}`;
                 const escapedHeader = sectionHeader.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                const headerRegex = new RegExp(`^${escapedHeader}`, 'im');
+                const headerRegex = new RegExp(`^${escapedHeader}(?:\\s*$|\\s+&)`, 'im');
                 const headerMatch = headerRegex.exec(newBody);
                 if (!headerMatch) {
                     return { ok: false, message: `Section "${removeSection}" tidak ditemukan.`, meta: { trace_id: traceId } };

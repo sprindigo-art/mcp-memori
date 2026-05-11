@@ -108,12 +108,13 @@ function rerankResults(results, originalQuery) {
             }
         }
 
-        // v8.2: TITLE KEYWORD DENSITY BOOST — only count NON-COMMON words in title
-        // Prevents generic technique runbooks from outranking specific target runbooks
+        // v8.8: TITLE FULL KEYWORD BOOST — count ALL query words in title (including common)
+        // Jika title mengandung banyak query words = highly relevant, even if words are "common"
+        // Example: query "install SSH Windows" → title "[TEKNIK] Install SSH Windows" = 3 matches → big boost
         const titleLower = (item.title || '').toLowerCase();
-        const titleWordMatches = queryWords.filter(w => !COMMON_TECHNIQUE_WORDS.has(w) && titleLower.includes(w)).length;
-        if (titleWordMatches >= 2) {
-            score *= (1 + titleWordMatches * 0.4);
+        const titleAllMatches = queryWords.filter(w => titleLower.includes(w)).length;
+        if (titleAllMatches >= 2) {
+            score *= (1 + titleAllMatches * 0.5);
         }
 
         // ERROR PENALTY: Items with known failures score lower
@@ -124,8 +125,10 @@ function rerankResults(results, originalQuery) {
             }
         }
 
-        // v8.3 Fix 13: TEKNIK docs depriority for target-access queries
-        if (titleLower.startsWith('[teknik]') && targetVariants.size > 0) {
+        // v8.8: TEKNIK depriority ONLY for target-specific queries (domain/IP in query)
+        // Don't deprioritize TEKNIK for generic technique queries like "install SSH Windows"
+        const hasDomainOrIp = queryWords.some(w => /\.\w{2,}$/.test(w) || /^\d{1,3}\.\d{1,3}/.test(w));
+        if (titleLower.startsWith('[teknik]') && hasDomainOrIp && targetVariants.size > 0) {
             const titleHasTarget = [...targetVariants].some(tk => titleLower.includes(tk));
             if (!titleHasTarget) {
                 score *= 0.4;
@@ -261,6 +264,15 @@ export async function execute(params) {
             }
         } else {
             mergedResults = rawResults;
+        }
+
+        // v8.8: scope_id post-filter — remove results not matching scope
+        if (scopeId) {
+            const scopeNorm = scopeId.replace(/\.md$/, '').toLowerCase();
+            mergedResults = mergedResults.filter(item => {
+                const itemId = (item.id || '').toLowerCase();
+                return itemId === scopeId.toLowerCase() || itemId.includes(scopeNorm);
+            });
         }
 
         // v8.2: Enrich ALL items missing title/snippet/content_length

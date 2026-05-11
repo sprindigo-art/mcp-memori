@@ -10,7 +10,7 @@ import { incrementAccessCount } from '../../storage/searchIndex.js';
 import logger from '../../utils/logger.js';
 import { LRUCache } from 'lru-cache';
 
-const MAX_OUTPUT_CHARS = 80000; // Safe limit agar tidak exceed token limit
+const MAX_OUTPUT_CHARS = 50000; // Reduced from 80K — Claude Code harness blocks >50K tool output
 
 /**
  * v7.0: LRU Cache for memory_get — reduces filesystem I/O
@@ -258,15 +258,33 @@ export async function execute(params) {
             let result = matched.join('\n\n---\n\n');
 
             // SEARCH FILTER: if search param provided, filter to matching ### entries only
+            // v8.8: keyword scoring — entries matching more keywords rank higher
             if (search && search.trim()) {
                 const searchLower = search.trim().toLowerCase();
+                const keywords = searchLower.split(/\s+/).filter(w => w.length >= 2);
                 const entries = result.split(/(?=^### )/m);
-                const searchMatched = entries.filter(entry => entry.toLowerCase().includes(searchLower));
+                let searchMatched;
+                if (keywords.length <= 1) {
+                    searchMatched = entries.filter(entry => entry.toLowerCase().includes(searchLower));
+                } else {
+                    // Multi-word: try exact substring first, fallback to keyword scoring
+                    searchMatched = entries.filter(entry => entry.toLowerCase().includes(searchLower));
+                    if (searchMatched.length === 0) {
+                        const minHits = Math.max(1, Math.ceil(keywords.length * 0.4));
+                        const scored = entries.map(entry => {
+                            const entryLower = entry.toLowerCase();
+                            const hits = keywords.filter(kw => entryLower.includes(kw)).length;
+                            return { entry, hits };
+                        }).filter(s => s.hits >= minHits);
+                        scored.sort((a, b) => b.hits - a.hits);
+                        searchMatched = scored.map(s => s.entry);
+                    }
+                }
                 if (searchMatched.length === 0) {
                     confirmRead(item.id, 'section', result.length);
                     return {
                         __plaintext: true,
-                        text: `# ${item.title} — Section: ${section} | search: "${search}"\n\nNo ### entries containing "${search}" found in this section (${entries.length} entries checked, ${result.length} chars total).\n\nTip: try memory_search({query:"${search}", scope_id:"${item.id}"}) for fuzzy search.`
+                        text: `# ${item.title} — Section: ${section} | search: "${search}"\n\nNo ### entries containing "${search}" found in section "${section}" (${entries.length} entries checked, ${result.length} chars total).\n\n⚠️ Data mungkin ada di SECTION LAIN. Gunakan:\n1. memory_search({query:"${search}", scope_id:"${item.id}"}) — cari di SEMUA section\n2. memory_get({id:"${item.id}", section:"EXPLOIT"}) atau section:"GAGAL" — coba section lain`
                     };
                 }
                 // Rebuild result with only matching entries + section header
@@ -340,6 +358,12 @@ export async function execute(params) {
         if (totalChars > effectiveLimit || offset > 0) {
             header += `\n\n> **Pagination**: chars ${offset}-${offset + chunk.length} of ${totalChars}` +
                 (hasMore ? ` | **Next**: memory_get({id:"${item.id}", offset:${offset + effectiveLimit}}) | ${remaining} chars remaining` : ' | **END**');
+            if (hasMore && offset === 0) {
+                header += `\n> ⚠️ RUNBOOK BESAR (${Math.round(totalChars/1024)}KB) — output ini HANYA ${Math.round(effectiveLimit/1024)}KB pertama. WAJIB baca sisa via:`;
+                header += `\n>   1. \`Read /home/kali/Desktop/mcp-memori/runbooks/${item.id}\` bertahap (offset/limit)`;
+                header += `\n>   2. ATAU \`memory_get({id:"${item.id}", section:"LIVE STATUS"})\` untuk section spesifik`;
+                header += `\n> DILARANG langsung upsert tanpa baca sisa content.`;
+            }
         }
 
         return {

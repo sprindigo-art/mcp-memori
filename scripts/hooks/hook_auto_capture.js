@@ -130,20 +130,43 @@ async function main() {
             tool_response_summary: responseSummary.substring(0, 300)
         });
 
-        // v8.3: Writeback counter — track tool calls since last memory_upsert
-        // Reset on upsert, increment on side-effect tools. Warn at >10.
+        // v8.8: Smart writeback — warn ONLY on meaningful data, not tool call count
+        // Detect: credential, shell/RCE, exploit success/fail, privesc, persistence, vuln confirmed
         const isWriteback = toolName.includes('memory_upsert');
         const counterPath = sessionId ? `/tmp/mcp-memori-counter-${sessionId.replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 100)}` : COUNTER_PATH;
         let counter = 0;
         try { counter = parseInt(readFileSync(counterPath, 'utf8')) || 0; } catch {}
-        counter = isWriteback ? 0 : counter + 1;
+
+        // Only count ACTION tools (Bash), not research/read/prep tools
+        const isActionTool = /^Bash$/i.test(toolName);
+        const isResearchTool = /jina|exa|tavily|cve-intel|memory_get|memory_search|memory_verify|memory_list|memory_stats|memory_timeline/i.test(toolName);
+        counter = isWriteback ? 0 : (isResearchTool ? counter : counter + 1);
         try { writeFileSync(counterPath, String(counter)); } catch {}
 
-        if (counter >= 10 && (counter === 10 || counter % 5 === 0)) {
+        // Detect meaningful data in response that MUST be saved
+        const respLower = (responseSummary || '').toLowerCase();
+        const hasMeaningfulData = /password[:\s]|passwd[:\s]|credential|root@|uid=0|www-data|reverse.?shell|connect.?back|shell.?gained|rce.?confirm|success.*exploit|exploit.*success|gagal|failed|blocked|patched|permission.?denied|access.?denied|upload.?success|webshell|persistence|privilege.?escalat|root.?access|superuser|\.env|api.?key|token[:\s]|secret[:\s]/i.test(respLower);
+
+        if (hasMeaningfulData && counter > 0) {
+            // Meaningful data detected — warn immediately
+            const dataType = respLower.includes('password') || respLower.includes('credential') || respLower.includes('.env') ? 'CREDENTIAL'
+                : respLower.includes('root@') || respLower.includes('uid=0') || respLower.includes('superuser') ? 'PRIVILEGE ESCALATION'
+                : respLower.includes('shell') || respLower.includes('rce') || respLower.includes('reverse') ? 'SHELL/RCE'
+                : respLower.includes('gagal') || respLower.includes('failed') || respLower.includes('denied') ? 'KEGAGALAN'
+                : respLower.includes('upload') || respLower.includes('webshell') || respLower.includes('persistence') ? 'PERSISTENCE'
+                : 'DATA PENTING';
             process.stdout.write(JSON.stringify({
                 hookSpecificOutput: {
                     hookEventName: 'PostToolUse',
-                    additionalContext: `⚠️ WRITEBACK WARNING: ${counter} tool calls tanpa memory_upsert. Simpan progress SEKARANG sebelum compaction menghapus data. Jalankan memory_get lalu memory_upsert.`
+                    additionalContext: `⚠️ WRITEBACK: ${dataType} terdeteksi di output. SIMPAN ke memori SEKARANG (memory_get lalu memory_upsert). Data: ${respLower.substring(0, 100)}`
+                }
+            }));
+        } else if (counter >= 30 && counter % 10 === 0) {
+            // Fallback: generic warning at 30+ action calls (bukan 10)
+            process.stdout.write(JSON.stringify({
+                hookSpecificOutput: {
+                    hookEventName: 'PostToolUse',
+                    additionalContext: `⚠️ WRITEBACK WARNING: ${counter} action calls tanpa memory_upsert. Simpan progress sebelum compaction.`
                 }
             }));
         }

@@ -66,31 +66,17 @@ function releaseLock(filepath) {
 /**
  * v7.4: ATOMIC WRITE — crash-safe file writing
  * Write to .tmp first, then rename (atomic on POSIX).
- * Also creates .bak backup of existing file for recovery.
  * v7.5: Added file locking for concurrent write protection
- * Prevents: crash mid-write = corrupt file (riset: DEV.to "Three Memory Mistakes")
- */
-/**
- * Export lock primitives so callers can hold lock across read+modify+write
- * (prevents TOCTOU race when concurrent writers compute diffs on stale body).
+ * v8.8: Removed .bak creation — .tmp→rename is already atomic, .bak files were never cleaned up
  */
 export { acquireLock, releaseLock };
 
 export function atomicWriteFileSync(filepath, content, encoding = 'utf8') {
     const tmpPath = filepath + '.tmp';
-    const bakPath = filepath + '.bak';
 
     acquireLock(filepath);
     try {
-        // Backup existing file (if exists) for recovery
-        if (existsSync(filepath)) {
-            try { copyFileSync(filepath, bakPath); } catch {}
-        }
-
-        // Write to .tmp first
         writeFileSync(tmpPath, content, encoding);
-
-        // Atomic rename: .tmp → target (POSIX atomic)
         renameSync(tmpPath, filepath);
     } finally {
         releaseLock(filepath);
@@ -313,10 +299,13 @@ export function findSectionEnd(body, sectionStartOffset) {
 export function appendToSection(body, sectionName, newContent) {
     const sectionHeader = sectionName.startsWith('## ') ? sectionName : `## ${sectionName}`;
     const escapedHeader = sectionHeader.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const headerRegex = new RegExp(`^${escapedHeader}`, 'im');
+    // Exact section match — anchor with word boundary or end-of-line to prevent
+    // "## CREDENTIAL" matching "## CREDENTIALS:" or "## CREDENTIAL_OLD"
+    const headerRegex = new RegExp(`^${escapedHeader}(?:\\s*$|\\s+&)`, 'im');
 
-    // Downgrade ## to ### in appended content — prevent creating false section boundaries
-    newContent = newContent.replace(/^## (?!RECON|CREDENTIAL|EXPLOIT|GAGAL|LIVE STATUS|RE-?ENTRY|SESSION LOG|_AUTO_LOG|_CHANGELOG|INFO\b)/gim, '### ');
+    // Downgrade ## to ### in appended content — ONLY keep standard section names as ##
+    // Everything else (## TARGET:, ## DATE:, ## METHOD:, ## CREDENTIALS:, etc) → ###
+    newContent = newContent.replace(/^(##) (?!(?:RECON|CREDENTIAL|EXPLOIT|GAGAL|LIVE STATUS|RE-?ENTRY CHECKLIST|SESSION LOG|_AUTO_LOG|_CHANGELOG|INFO|PERSISTENCE)\s*$)/gim, '### ');
 
     // FILE-WIDE exact match FIRST — before section existence check
     // Catches cross-section duplicates even when target section doesn't exist yet
@@ -332,9 +321,9 @@ export function appendToSection(body, sectionName, newContent) {
             const lineLower = l.toLowerCase();
             if (bodyLower.includes(lineLower)) return true;
             const core = lineLower.replace(/[\)\]\}\.\,\;\:]+$/, '').replace(/^[\-\*\#\s]+/, '').trim();
-            return core.length >= 25 && bodyLower.includes(core);
+            return core.length >= 40 && bodyLower.includes(core);
         });
-        if (preMatched.length / preLines.length >= 0.6) {
+        if (preMatched.length / preLines.length >= 0.5) {
             return { body, action: 'skipped_near_duplicate', match_ratio: Math.round((preMatched.length / preLines.length) * 100) };
         }
     }
@@ -363,24 +352,21 @@ export function appendToSection(body, sectionName, newContent) {
         return { body, action: 'skipped_duplicate' };
     }
 
-    // Anti-duplicate: NEAR-DUPLICATE — skip if >60% of lines already exist (lowered from 80%)
-    // Uses core-fragment matching: strip markdown/punctuation, match leading 25+ chars
+    // Anti-duplicate: NEAR-DUPLICATE — skip if >50% of lines already exist
+    // Uses core-fragment matching: strip markdown/punctuation, match 40+ char core
     const newLines = newContent.trim().split('\n').map(l => l.trim()).filter(l => l.length > 10);
     if (newLines.length >= 2) {
         const existingLower = existingSection.toLowerCase();
-        const bodyLower = body.toLowerCase(); // file-wide check
+        const bodyLower = body.toLowerCase();
         const matchedLines = newLines.filter(l => {
             const lineLower = l.toLowerCase();
-            // Exact substring match (section-level)
             if (existingLower.includes(lineLower)) return true;
-            // Exact substring match (file-wide — catches cross-section duplicates)
             if (bodyLower.includes(lineLower)) return true;
-            // Core-fragment match: strip trailing punc, match leading 25+ chars (was 30)
             const core = lineLower.replace(/[\)\]\}\.\,\;\:]+$/, '').replace(/^[\-\*\#\s]+/, '').trim();
-            return core.length >= 25 && (existingLower.includes(core) || bodyLower.includes(core));
+            return core.length >= 40 && (existingLower.includes(core) || bodyLower.includes(core));
         });
         const matchRatio = matchedLines.length / newLines.length;
-        if (matchRatio >= 0.6) { // lowered from 0.8 — catches reformulated content
+        if (matchRatio >= 0.5) {
             return { body, action: 'skipped_near_duplicate', match_ratio: Math.round(matchRatio * 100) };
         }
     }
@@ -393,21 +379,36 @@ export function appendToSection(body, sectionName, newContent) {
     const contradictionPairs = [
         ['alive', 'dead'],        // credential/service status
         ['dead', 'alive'],
+        ['active', 'dead'],       // persistence status
+        ['dead', 'active'],
+        ['active', 'inactive'],
+        ['inactive', 'active'],
         ['patched', 'vulnerable'], // vulnerability status
         ['vulnerable', 'patched'],
         ['open', 'closed'],       // port status
         ['closed', 'open'],
         ['up', 'down'],           // service status
+        ['down', 'up'],
         ['running', 'stopped'],
+        ['stopped', 'running'],
         ['valid', 'invalid'],     // credential validity
         ['invalid', 'valid'],
         ['success', 'failed'],    // exploit result
+        ['failed', 'success'],
         ['berhasil', 'gagal'],    // Indonesian equivalents
         ['gagal', 'berhasil'],
+        ['success', 'gagal'],     // cross-language
+        ['gagal', 'success'],
+        ['failed', 'berhasil'],
+        ['berhasil', 'failed'],
         ['accessible', 'unreachable'],
         ['unreachable', 'accessible'],
         ['enabled', 'disabled'],
+        ['disabled', 'enabled'],
+        ['online', 'offline'],
+        ['offline', 'online'],
         ['root', 'unprivileged'], // privilege level
+        ['unprivileged', 'root'],
     ];
     for (const [newState, existState] of contradictionPairs) {
         if (newLower.includes(newState) && existLower.includes(existState)) {

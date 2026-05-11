@@ -70,7 +70,7 @@ async function main() {
                     const { body: rbBody } = parseFrontmatter(rbContent);
                     const extractSection = (name) => {
                         const header = `## ${name}`;
-                        const regex = new RegExp(`^${header.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'im');
+                        const regex = new RegExp(`^${header.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:\\s*$|\\s+&)`, 'im');
                         const m = regex.exec(rbBody);
                         if (!m) return '';
                         const end = findSectionEnd(rbBody, m.index);

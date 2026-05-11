@@ -38,7 +38,7 @@ function findRunbookPath(target) {
 function extractSection(body, sectionName) {
     const header = `## ${sectionName}`;
     // Must match at START OF LINE (not inside _CHANGELOG text like "replaced ## LIVE STATUS")
-    const regex = new RegExp(`^${header.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'im');
+    const regex = new RegExp(`^${header.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:\\s*$|\\s+&)`, 'im');
     const match = regex.exec(body);
     if (!match) return '';
     // Verify it's a real section header (preceded by newline or start of string)

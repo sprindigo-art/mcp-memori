@@ -12,9 +12,12 @@ import logger from '../../utils/logger.js';
 
 const CONTRADICTION_PAIRS = [
     ['alive', 'dead'], ['dead', 'alive'],
+    ['active', 'dead'], ['dead', 'active'],
+    ['active', 'inactive'], ['inactive', 'active'],
     ['patched', 'vulnerable'], ['vulnerable', 'patched'],
     ['open', 'closed'], ['closed', 'open'],
-    ['up', 'down'], ['down', 'up'], ['running', 'stopped'], ['stopped', 'running'],
+    ['up', 'down'], ['down', 'up'],
+    ['running', 'stopped'], ['stopped', 'running'],
     ['valid', 'invalid'], ['invalid', 'valid'],
     ['success', 'failed'], ['failed', 'success'],
     ['berhasil', 'gagal'], ['gagal', 'berhasil'],
@@ -22,6 +25,7 @@ const CONTRADICTION_PAIRS = [
     ['success', 'gagal'], ['gagal', 'success'],
     ['accessible', 'unreachable'], ['unreachable', 'accessible'],
     ['enabled', 'disabled'], ['disabled', 'enabled'],
+    ['online', 'offline'], ['offline', 'online'],
     ['root', 'unprivileged'], ['unprivileged', 'root'],
 ];
 
