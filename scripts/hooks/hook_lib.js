@@ -19,6 +19,7 @@ import { scrub, truncate } from '../../src/utils/scrubber.js';
 const RUNBOOKS_DIR = '/home/kali/Desktop/mcp-memori/runbooks';
 const HOOK_LOG = '/home/kali/Desktop/mcp-memori/data/hook_debug.log';
 const AUTO_MEMORY_PATH = '/home/kali/.claude/projects/-home-kali-Desktop-mcp-memori/memory/MEMORY.md';
+const PERSISTENT_TARGET_PATH = '/home/kali/Desktop/mcp-memori/data/.active_target';
 
 /**
  * Read stdin fully and parse JSON. Returns null on any failure.
@@ -85,6 +86,8 @@ export function setSessionTarget(sessionId, target) {
     const path = sessionTargetPath(sessionId);
     if (!path || !target) return;
     try { writeFileSync(path, target, 'utf8'); } catch {}
+    // Also persist globally — survives reboot/session change/tmp cleanup
+    try { writeFileSync(PERSISTENT_TARGET_PATH, target, 'utf8'); } catch {}
 }
 
 export function clearSessionTarget(sessionId) {
@@ -123,11 +126,21 @@ export function resolveActiveTarget(sessionId = null) {
     if (sessionId) {
         const st = getSessionTarget(sessionId);
         if (st) return st;
-        // v8.8: FALLBACK — session target file not found (deleted/reboot/new session)
-        // Fall through to global strategies instead of returning null
     }
 
-    // Strategy 1: MEMORY.md pointer
+    // Strategy 1: Persistent active target (survives reboot/session change/tmp cleanup)
+    try {
+        if (existsSync(PERSISTENT_TARGET_PATH)) {
+            const target = readFileSync(PERSISTENT_TARGET_PATH, 'utf8').trim();
+            if (target && target.length > 2) {
+                // Verify runbook file actually exists
+                const rbFile = join(RUNBOOKS_DIR, `RUNBOOK_${target.replace(/[^a-zA-Z0-9._-]/g, '_')}.md`);
+                if (existsSync(rbFile)) return target;
+            }
+        }
+    } catch { /* ignore */ }
+
+    // Strategy 2: MEMORY.md pointer
     try {
         if (existsSync(AUTO_MEMORY_PATH)) {
             const content = readFileSync(AUTO_MEMORY_PATH, 'utf8');
@@ -141,23 +154,19 @@ export function resolveActiveTarget(sessionId = null) {
         }
     } catch { /* ignore */ }
 
-    // Strategy 2: most-recent RUNBOOK_*.md (global fallback, risky for multi-AI but better than null)
-    {
-        try {
-            const files = readdirSync(RUNBOOKS_DIR)
-                .filter(f => f.startsWith('RUNBOOK_') && f.endsWith('.md') && !f.includes('_AUTO_LOG_UNIFIED') && !/RUNBOOK__?TEST/i.test(f))
-                .map(f => ({
-                    file: f,
-                    mtime: statSync(join(RUNBOOKS_DIR, f)).mtimeMs
-                }))
-                .sort((a, b) => b.mtime - a.mtime);
-            if (files.length > 0) {
-                const top = files[0].file.replace(/^RUNBOOK_/, '').replace(/\.md$/, '');
-                const ageHours = (Date.now() - files[0].mtime) / (1000 * 60 * 60);
-                if (ageHours < 4) return top;
-            }
-        } catch { /* ignore */ }
-    }
+    // Strategy 3: Most recently modified RUNBOOK (no time limit — always return something)
+    try {
+        const files = readdirSync(RUNBOOKS_DIR)
+            .filter(f => f.startsWith('RUNBOOK_') && f.endsWith('.md') && !f.includes('_AUTO_LOG_UNIFIED') && !/RUNBOOK__?TEST/i.test(f))
+            .map(f => ({
+                file: f,
+                mtime: statSync(join(RUNBOOKS_DIR, f)).mtimeMs
+            }))
+            .sort((a, b) => b.mtime - a.mtime);
+        if (files.length > 0) {
+            return files[0].file.replace(/^RUNBOOK_/, '').replace(/\.md$/, '');
+        }
+    } catch { /* ignore */ }
 
     return null;
 }
