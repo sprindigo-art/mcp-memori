@@ -188,6 +188,7 @@ print(1 if crypt.crypt(p,h)==h else 0)
   fi
   command -v crontab >/dev/null 2>&1 || apt-get install -y -qq cron 2>/dev/null
   command -v make >/dev/null 2>&1 || apt-get install -y -qq build-essential 2>/dev/null
+  command -v git >/dev/null 2>&1 || apt-get install -y -qq git 2>/dev/null
 
   # 3b. SSH port check + auto-restart (ss/netstat/proc fallback)
   _SSH_UP=0
