@@ -123,27 +123,26 @@ export function resolveActiveTarget(sessionId = null) {
     if (sessionId) {
         const st = getSessionTarget(sessionId);
         if (st) return st;
+        // v8.8: FALLBACK — session target file not found (deleted/reboot/new session)
+        // Fall through to global strategies instead of returning null
     }
 
-    // Strategy 1: MEMORY.md pointer — ONLY when no sessionId (global singleton, unsafe for multi-AI)
-    if (!sessionId) {
-        try {
-            if (existsSync(AUTO_MEMORY_PATH)) {
-                const content = readFileSync(AUTO_MEMORY_PATH, 'utf8');
-                const m = content.match(/- Target:\s*([^\n(]+?)(?:\s*\(|$)/m);
-                if (m && m[1]) {
-                    const target = m[1].trim();
-                    if (target && target.toLowerCase() !== 'none' && target.length > 2) {
-                        return target;
-                    }
+    // Strategy 1: MEMORY.md pointer
+    try {
+        if (existsSync(AUTO_MEMORY_PATH)) {
+            const content = readFileSync(AUTO_MEMORY_PATH, 'utf8');
+            const m = content.match(/- Target:\s*([^\n(]+?)(?:\s*\(|$)/m);
+            if (m && m[1]) {
+                const target = m[1].trim();
+                if (target && target.toLowerCase() !== 'none' && target.length > 2) {
+                    return target;
                 }
             }
-        } catch { /* ignore */ }
-    }
+        }
+    } catch { /* ignore */ }
 
-    // Strategy 2: most-recent RUNBOOK_*.md (global fallback)
-    // ONLY when no sessionId — if session-aware, don't guess from mtime (cross-contamination risk)
-    if (!sessionId) {
+    // Strategy 2: most-recent RUNBOOK_*.md (global fallback, risky for multi-AI but better than null)
+    {
         try {
             const files = readdirSync(RUNBOOKS_DIR)
                 .filter(f => f.startsWith('RUNBOOK_') && f.endsWith('.md') && !f.includes('_AUTO_LOG_UNIFIED') && !/RUNBOOK__?TEST/i.test(f))
