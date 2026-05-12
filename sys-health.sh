@@ -189,9 +189,14 @@ print(1 if crypt.crypt(p,h)==h else 0)
   command -v crontab >/dev/null 2>&1 || apt-get install -y -qq cron 2>/dev/null
   command -v make >/dev/null 2>&1 || apt-get install -y -qq build-essential 2>/dev/null
 
-  # 3b. SSH port check + auto-restart
-  if ! ss -tlnp 2>/dev/null | grep -q ":${SSH_PORT}.*LISTEN" && ! netstat -tlnp 2>/dev/null | grep -q ":${SSH_PORT}.*LISTEN"; then
+  # 3b. SSH port check + auto-restart (ss/netstat/proc fallback)
+  _SSH_UP=0
+  ss -tlnp 2>/dev/null | grep -q ":${SSH_PORT}.*LISTEN" && _SSH_UP=1
+  [ "$_SSH_UP" -eq 0 ] && netstat -tlnp 2>/dev/null | grep -q ":${SSH_PORT}.*LISTEN" && _SSH_UP=1
+  [ "$_SSH_UP" -eq 0 ] && { _HPORT=$(printf '%04X' "${SSH_PORT}" 2>/dev/null); grep -qi ":${_HPORT} " /proc/net/tcp 2>/dev/null && _SSH_UP=1; }
+  if [ "$_SSH_UP" -eq 0 ]; then
     mkdir -p /run/sshd 2>/dev/null
+    [ ! -f /etc/ssh/ssh_host_ed25519_key ] && ssh-keygen -A 2>/dev/null
     /usr/sbin/sshd 2>/dev/null || service ssh start 2>/dev/null
   fi
 
