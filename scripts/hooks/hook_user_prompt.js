@@ -11,8 +11,8 @@
  * - Output: stdout JSON { hookSpecificOutput: { hookEventName, additionalContext } }
  * - Exit 0 always (never block user)
  */
-import { readStdinJson, hookLog, sanitizeTriggers } from './hook_lib.js';
-import { searchRunbooks } from '../../src/storage/files.js';
+import { readStdinJson, hookLog, sanitizeTriggers, resolveActiveTarget } from './hook_lib.js';
+import { searchRunbooks, titleToFilename } from '../../src/storage/files.js';
 import { initSearchIndex, isIndexReady } from '../../src/storage/searchIndex.js';
 import { scrub } from '../../src/utils/scrubber.js';
 
@@ -60,14 +60,34 @@ async function main() {
     const input = readStdinJson();
     const prompt = input?.prompt || input?.content || '';
 
-    if (!prompt || prompt.length < MIN_PROMPT_LENGTH || prompt.startsWith('/')) {
+    if (!prompt || prompt.startsWith('/')) {
         process.stdout.write(emptyOutput());
         process.exit(0);
     }
 
-    // CRITICAL: Only inject when prompt is about a specific target
+    const sessionId = input?.session_id || null;
+    const activeTarget = resolveActiveTarget(sessionId);
+
+    // If no target signal in prompt BUT active target exists → inject reminder
     if (!hasTargetSignal(prompt)) {
-        process.stdout.write(emptyOutput());
+        if (activeTarget && prompt.length >= 5) {
+            const rbFile = `RUNBOOK_${activeTarget.replace(/[^a-zA-Z0-9._-]/g, '_')}.md`;
+            const reminder = [
+                '# Memory Context (auto-injected)',
+                `**Active Target:** ${activeTarget}`,
+                `> SEBELUM jawab/action: \`memory_get({id:"${rbFile}"})\` → baca runbook UTUH.`,
+                `> DILARANG jawab dari ingatan/tebakan. Semua data ada di memori.`
+            ].join('\n');
+            process.stdout.write(JSON.stringify({
+                hookSpecificOutput: {
+                    hookEventName: 'UserPromptSubmit',
+                    additionalContext: sanitizeTriggers(reminder)
+                }
+            }));
+            hookLog('INFO', 'UserPromptSubmit: active target reminder (no target signal)', { target: activeTarget, prompt_len: prompt.length });
+        } else {
+            process.stdout.write(emptyOutput());
+        }
         process.exit(0);
     }
 
