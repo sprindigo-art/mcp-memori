@@ -11,7 +11,7 @@
  */
 import { readFileSync, existsSync, openSync, fsyncSync, closeSync } from 'fs';
 import { join } from 'path';
-import { readStdinJson, hookLog, resolveActiveTarget, callAutolog, sanitizeTriggers } from './hook_lib.js';
+import { readStdinJson, hookLog, resolveActiveTarget, callAutolog, sanitizeTriggers, setPersistentTarget } from './hook_lib.js';
 import { RUNBOOKS_DIR, titleToFilename, findByTitle, findByFuzzyTitle, parseFrontmatter, findSectionEnd } from '../../src/storage/files.js';
 import { scrub } from '../../src/utils/scrubber.js';
 
@@ -33,6 +33,8 @@ async function main() {
     const trigger = input?.trigger || 'unknown'; // "auto" or "manual"
     const sessionId = input?.session_id || null;
     const target = resolveActiveTarget(sessionId);
+
+    if (target) setPersistentTarget(target, sessionId);
 
     try {
         // 1. Append compaction marker to _AUTO_LOG for post-mortem forensic

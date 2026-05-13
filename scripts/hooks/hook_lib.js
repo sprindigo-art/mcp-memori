@@ -86,8 +86,39 @@ export function setSessionTarget(sessionId, target) {
     const path = sessionTargetPath(sessionId);
     if (!path || !target) return;
     try { writeFileSync(path, target, 'utf8'); } catch {}
-    // Also persist globally — survives reboot/session change/tmp cleanup
-    try { writeFileSync(PERSISTENT_TARGET_PATH, target, 'utf8'); } catch {}
+    // NOTE: Do NOT write to PERSISTENT_TARGET_PATH here — multi-session
+    // writes cause flip-flop. Persistent only set by PreCompact hook.
+}
+
+export function setPersistentTarget(target, sessionId = null) {
+    if (!target) return;
+    try {
+        // Multi-session safe: store session→target mapping as JSON
+        let data = {};
+        try { data = JSON.parse(readFileSync(PERSISTENT_TARGET_PATH, 'utf8')); } catch {}
+        if (typeof data !== 'object' || data === null || typeof data.targets !== 'object') {
+            data = { targets: {}, last: null, updated: null };
+        }
+        const key = sessionId || '_default';
+        data.targets[key] = target;
+        data.last = target;
+        data.updated = new Date().toISOString();
+        writeFileSync(PERSISTENT_TARGET_PATH, JSON.stringify(data), 'utf8');
+    } catch {}
+}
+
+function readPersistentTarget(sessionId = null) {
+    try {
+        const raw = readFileSync(PERSISTENT_TARGET_PATH, 'utf8').trim();
+        // Support both old format (plain text) and new format (JSON)
+        if (raw.startsWith('{')) {
+            const data = JSON.parse(raw);
+            // Prefer session-specific target, then last
+            if (sessionId && data.targets?.[sessionId]) return data.targets[sessionId];
+            return data.last || null;
+        }
+        return raw || null; // old plain-text format
+    } catch { return null; }
 }
 
 export function clearSessionTarget(sessionId) {
@@ -129,14 +160,12 @@ export function resolveActiveTarget(sessionId = null) {
     }
 
     // Strategy 1: Persistent active target (survives reboot/session change/tmp cleanup)
+    // Multi-session safe: reads session-specific target first, then last
     try {
-        if (existsSync(PERSISTENT_TARGET_PATH)) {
-            const target = readFileSync(PERSISTENT_TARGET_PATH, 'utf8').trim();
-            if (target && target.length > 2) {
-                // Verify runbook file actually exists
-                const rbFile = join(RUNBOOKS_DIR, `RUNBOOK_${target.replace(/[^a-zA-Z0-9._-]/g, '_')}.md`);
-                if (existsSync(rbFile)) return target;
-            }
+        const persTarget = readPersistentTarget(sessionId);
+        if (persTarget && persTarget.length > 2) {
+            const rbFile = join(RUNBOOKS_DIR, `RUNBOOK_${persTarget.replace(/[^a-zA-Z0-9._-]/g, '_')}.md`);
+            if (existsSync(rbFile)) return persTarget;
         }
     } catch { /* ignore */ }
 

@@ -16,7 +16,7 @@ import { readFileSync, existsSync, appendFileSync, mkdirSync } from 'fs';
 import { spawn } from 'child_process';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { readStdinJson, hookLog, resolveActiveTarget, clearSessionTarget } from './hook_lib.js';
+import { readStdinJson, hookLog, resolveActiveTarget, clearSessionTarget, setPersistentTarget } from './hook_lib.js';
 import {
     RUNBOOKS_DIR, titleToFilename, findByTitle, findByFuzzyTitle,
     parseFrontmatter, findSectionEnd, acquireLock, releaseLock, atomicWriteFileSync, buildFrontmatter
@@ -167,6 +167,8 @@ async function main() {
     const input = readStdinJson();
     const sessionId = input?.session_id || null;
     const target = resolveActiveTarget(sessionId);
+
+    if (target) setPersistentTarget(target, sessionId);
 
     if (!target) {
         hookLog('INFO', 'Stop: no active target, skip');
