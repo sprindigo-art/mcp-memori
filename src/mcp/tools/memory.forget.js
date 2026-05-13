@@ -35,22 +35,25 @@ export function confirmRead(id, mode = 'full', charsRead = 0) {
     }
 
     if (existing && existing.mode === 'full') {
-        // Already fully read — just update timestamp
         existing.timestamp = now;
         existing.charsRead = Math.max(existing.charsRead, charsRead);
         return;
     }
 
+    // Accumulate reads — partial + sections can upgrade to enough for unlock
+    const newChars = (existing ? existing.charsRead : 0) + charsRead;
+    const newSections = existing ? (existing.sectionsRead || 0) : 0;
+    const bestMode = mode === 'full' ? 'full' : (existing?.mode === 'partial' && mode === 'section') ? 'partial' : mode;
+
     readConfirmations.set(id, {
         timestamp: now,
-        mode,
-        charsRead,
-        sectionsRead: existing ? existing.sectionsRead : 0,
+        mode: bestMode,
+        charsRead: newChars,
+        sectionsRead: newSections,
         fullRead: mode === 'full' || (existing && existing.fullRead)
     });
 
-    // Upgrade: sections_list + section read = partial understanding
-    if (existing && mode === 'section') {
+    if (mode === 'section') {
         const entry = readConfirmations.get(id);
         entry.sectionsRead = (entry.sectionsRead || 0) + 1;
     }
@@ -67,8 +70,16 @@ export function hasBeenRead(id) {
     const tenMinutes = 10 * 60 * 1000;
     if ((Date.now() - entry.timestamp) >= tenMinutes) return false;
 
-    // FULL read (tanpa section parameter) = OK
+    // FULL read (entire content returned, no pagination) = OK
     if (entry.fullRead || entry.mode === 'full') return true;
+
+    // PARTIAL read (paginated, hasMore=true) = NOT enough alone
+    // Must combine with section reads or additional page reads to unlock
+    if (entry.mode === 'partial') {
+        // Partial + section reads = OK (AI read some pages + sections)
+        if (entry.sectionsRead >= 2 && entry.charsRead > 3000) return true;
+        return false;
+    }
 
     // sections_list ALONE = NOT enough
     if (entry.mode === 'sections_list') return false;

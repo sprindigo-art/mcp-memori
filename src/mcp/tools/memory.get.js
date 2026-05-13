@@ -327,8 +327,10 @@ export async function execute(params) {
         const hasMore = (offset + effectiveLimit) < totalChars;
         const remaining = totalChars - offset - effectiveLimit;
 
-        // Full read or significant chunk = confirm as full read
-        confirmRead(item.id, 'full', chunk.length);
+        // v8.8: Only mark 'full' if ALL content returned. If paginated (hasMore),
+        // mark 'partial' — AI must read more before upsert is allowed.
+        // This prevents: memory_get → "Output too large" → immediate upsert without reading.
+        confirmRead(item.id, hasMore ? 'partial' : 'full', chunk.length);
 
         // v7.1: Track usefulness — increment access count in search index
         try { incrementAccessCount(item.id); } catch {}
