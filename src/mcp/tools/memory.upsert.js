@@ -444,10 +444,13 @@ export async function execute(params) {
                         const raw = readFileSync(filepath, 'utf8');
                         const { meta, body } = parseFrontmatter(raw);
 
-                        const { body: newBody, action: appendAction, contradiction } = appendToSection(body, item.append_to_section, content);
+                        const { body: newBody, action: appendAction, contradiction, overlapWarning } = appendToSection(body, item.append_to_section, content);
 
                         if (contradiction) {
                             contradictions.push(`⚠️ CONTRADICTION in ## ${item.append_to_section} of ${actualFilename}: ${contradiction}`);
+                        }
+                        if (overlapWarning) {
+                            reminders.push(overlapWarning);
                         }
 
                         if (appendAction === 'skipped_duplicate' || appendAction === 'skipped_near_duplicate') {

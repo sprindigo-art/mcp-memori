@@ -425,6 +425,47 @@ export function appendToSection(body, sectionName, newContent) {
         stampedContent = `[${now}] ${stampedContent}`;
     }
 
+    // v8.8: Overlap detection — warn if new content relates to existing entry
+    let overlapWarning = null;
+    const contentLower = stampedContent.toLowerCase();
+    // Extract identifiers: file paths, IPs, tool/service names
+    const pathPattern = /[\w.-]+\/[\w.-]{3,}/g;
+    const newPaths = [...new Set((contentLower.match(pathPattern) || []).filter(p => p.length > 5))];
+    const newIPs = [...new Set((contentLower.match(/\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/g) || []))];
+    const identifiers = [...newPaths.slice(0, 5), ...newIPs.slice(0, 3)];
+
+    if (identifiers.length > 0) {
+        // Split existing section into ### entries and check body for identifier overlap
+        const entryBlocks = existingSection.split(/(?=^###\s)/m).filter(b => b.startsWith('###'));
+        for (const block of entryBlocks) {
+            const blockLower = block.toLowerCase();
+            const hits = identifiers.filter(id => blockLower.includes(id)).length;
+            if (hits >= 1) {
+                const entryTitle = (block.match(/^###\s+(.+)/m) || ['', 'unknown'])[1];
+                overlapWarning = `⚠️ OVERLAP: Content baru share identifiers (${identifiers.filter(id => blockLower.includes(id)).slice(0, 2).join(', ')}) dengan existing "### ${entryTitle.substring(0, 50)}". Pertimbangkan replace_entry untuk UPDATE, bukan append.`;
+                break;
+            }
+        }
+    }
+    // Also check title word overlap as fallback
+    if (!overlapWarning) {
+        const newTitleMatch = stampedContent.match(/^(?:\[\d{4}[^\]]*\]\s*)?###\s+(.+)/m);
+        if (newTitleMatch) {
+            const newWords = newTitleMatch[1].toLowerCase().replace(/[^a-z0-9\s]/g, '').trim().split(/\s+/).filter(w => w.length >= 3);
+            if (newWords.length >= 2) {
+                const existingTitles = existingSection.match(/^###\s+.+$/gm) || [];
+                for (const entry of existingTitles) {
+                    const entryWords = entry.replace(/^###\s+/, '').toLowerCase().replace(/[^a-z0-9\s]/g, '').trim().split(/\s+/).filter(w => w.length >= 3);
+                    const overlap = newWords.filter(w => entryWords.includes(w)).length;
+                    if (overlap >= 2 && overlap / Math.max(newWords.length, 1) >= 0.3) {
+                        overlapWarning = `⚠️ OVERLAP: Entry "${newTitleMatch[1].substring(0, 60)}" mirip dengan existing "${entry.substring(0, 60)}". Pertimbangkan replace_entry untuk UPDATE.`;
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
     // Append new content at END of section (before next major section)
     const updatedSection = existingSection.trimEnd() + '\n' + stampedContent + '\n';
     const before = body.substring(0, sectionStart);
@@ -434,6 +475,7 @@ export function appendToSection(body, sectionName, newContent) {
         action: 'section_appended'
     };
     if (contradiction) result.contradiction = contradiction;
+    if (overlapWarning) result.overlapWarning = overlapWarning;
     return result;
 }
 
