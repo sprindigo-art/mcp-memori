@@ -145,8 +145,6 @@ function appendLlmSummaryToActivityLog(filepath, summaryText, entryCount) {
             meta.updated = new Date().toISOString();
             const finalContent = buildFrontmatter(meta) + newBody2.trim() + '\n';
             const tmp = filepath + '.tmp';
-            const bak = filepath + '.bak';
-            if (existsSync(filepath)) { try { copyFileSync(filepath, bak); } catch {} }
             writeFileSync(tmp, finalContent, 'utf8');
             renameSync(tmp, filepath);
             return;
@@ -173,8 +171,6 @@ function appendLlmSummaryToActivityLog(filepath, summaryText, entryCount) {
     const finalContent = buildFrontmatter(meta) + newBody.trim() + '\n';
     // Inline atomic write under existing lock
     const tmp = filepath + '.tmp';
-    const bak = filepath + '.bak';
-    if (existsSync(filepath)) { try { copyFileSync(filepath, bak); } catch {} }
     writeFileSync(tmp, finalContent, 'utf8');
     renameSync(tmp, filepath);
 }

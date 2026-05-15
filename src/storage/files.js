@@ -224,6 +224,7 @@ function filterNoiseTags(tags) {
 const MAJOR_SECTION_PREFIXES = [
     'RECON', 'CREDENTIAL', 'EXPLOIT', 'GAGAL', 'LIVE STATUS',
     'RE-ENTRY', 'RE-ENTRY CHECKLIST', 'SESSION LOG', '_AUTO_LOG', '_CHANGELOG', 'INFO',
+    'ACTIVITY SUMMARY',
 ];
 
 /**
@@ -425,45 +426,72 @@ export function appendToSection(body, sectionName, newContent) {
         stampedContent = `[${now}] ${stampedContent}`;
     }
 
-    // v8.8: Overlap detection — warn if new content relates to existing entry
+    // v8.9: Overlap detection — BLOCK high-confidence overlap, WARN low-confidence
     let overlapWarning = null;
+    let overlapBlocked = false;
+    let overlappingEntry = null;
     const contentLower = stampedContent.toLowerCase();
-    // Extract identifiers: file paths, IPs, tool/service names
     const pathPattern = /[\w.-]+\/[\w.-]{3,}/g;
     const newPaths = [...new Set((contentLower.match(pathPattern) || []).filter(p => p.length > 5))];
     const newIPs = [...new Set((contentLower.match(/\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/g) || []))];
     const identifiers = [...newPaths.slice(0, 5), ...newIPs.slice(0, 3)];
 
     if (identifiers.length > 0) {
-        // Split existing section into ### entries and check body for identifier overlap
         const entryBlocks = existingSection.split(/(?=^###\s)/m).filter(b => b.startsWith('###'));
         for (const block of entryBlocks) {
             const blockLower = block.toLowerCase();
             const hits = identifiers.filter(id => blockLower.includes(id)).length;
-            if (hits >= 1) {
+            if (hits >= 2) {
                 const entryTitle = (block.match(/^###\s+(.+)/m) || ['', 'unknown'])[1];
-                overlapWarning = `⚠️ OVERLAP: Content baru share identifiers (${identifiers.filter(id => blockLower.includes(id)).slice(0, 2).join(', ')}) dengan existing "### ${entryTitle.substring(0, 50)}". Pertimbangkan replace_entry untuk UPDATE, bukan append.`;
+                overlapWarning = `🛑 OVERLAP BLOCKED: Content share ${hits} identifiers (${identifiers.filter(id => blockLower.includes(id)).slice(0, 3).join(', ')}) dengan existing "### ${entryTitle.substring(0, 50)}". FIX: replace_entry:"### ${entryTitle.substring(0, 60)}" untuk UPDATE entry ini. Entry LAIN yang genuinely baru (IP/service beda) TETAP bisa di-append.`;
+                overlapBlocked = true;
+                overlappingEntry = block.substring(0, 500);
                 break;
+            } else if (hits >= 1) {
+                const entryTitle = (block.match(/^###\s+(.+)/m) || ['', 'unknown'])[1];
+                overlapWarning = `⚠️ OVERLAP WARNING: Content share 1 identifier (${identifiers.filter(id => blockLower.includes(id))[0]}) dengan existing "### ${entryTitle.substring(0, 50)}". Cek apakah ini UPDATE (gunakan replace_entry) atau data genuinely baru.`;
+                overlappingEntry = block.substring(0, 300);
             }
         }
     }
-    // Also check title word overlap as fallback
-    if (!overlapWarning) {
+    if (!overlapBlocked) {
         const newTitleMatch = stampedContent.match(/^(?:\[\d{4}[^\]]*\]\s*)?###\s+(.+)/m);
         if (newTitleMatch) {
             const newWords = newTitleMatch[1].toLowerCase().replace(/[^a-z0-9\s]/g, '').trim().split(/\s+/).filter(w => w.length >= 3);
-            if (newWords.length >= 2) {
+            if (newWords.length >= 1) {
                 const existingTitles = existingSection.match(/^###\s+.+$/gm) || [];
+                const minOverlap = newWords.length === 1 ? 1 : 2;
                 for (const entry of existingTitles) {
                     const entryWords = entry.replace(/^###\s+/, '').toLowerCase().replace(/[^a-z0-9\s]/g, '').trim().split(/\s+/).filter(w => w.length >= 3);
                     const overlap = newWords.filter(w => entryWords.includes(w)).length;
-                    if (overlap >= 2 && overlap / Math.max(newWords.length, 1) >= 0.3) {
-                        overlapWarning = `⚠️ OVERLAP: Entry "${newTitleMatch[1].substring(0, 60)}" mirip dengan existing "${entry.substring(0, 60)}". Pertimbangkan replace_entry untuk UPDATE.`;
+                    if (overlap >= minOverlap && overlap / Math.max(newWords.length, 1) >= 0.5) {
+                        overlapWarning = `🛑 OVERLAP BLOCKED: Entry title "${newTitleMatch[1].substring(0, 60)}" ≥50% word match existing "${entry.substring(0, 60)}". FIX: replace_entry:"${entry.substring(0, 60)}" untuk UPDATE. Entry LAIN yang genuinely baru TETAP bisa di-append.`;
+                        overlapBlocked = true;
+                        const entryBlocks2 = existingSection.split(/(?=^###\s)/m).filter(b => b.startsWith('###'));
+                        const matchedBlock = entryBlocks2.find(b => b.startsWith(entry));
+                        overlappingEntry = matchedBlock ? matchedBlock.substring(0, 500) : entry;
                         break;
+                    } else if (overlap >= minOverlap && overlap / Math.max(newWords.length, 1) >= 0.3 && !overlapWarning) {
+                        overlapWarning = `⚠️ OVERLAP WARNING: Entry "${newTitleMatch[1].substring(0, 60)}" mirip "${entry.substring(0, 60)}". Cek apakah UPDATE atau data baru.`;
                     }
                 }
             }
         }
+    }
+
+    // Collect existing ### entry titles for response visibility
+    const existingEntryTitles = (existingSection.match(/^###\s+.+$/gm) || []).map(t => t.substring(0, 80));
+
+    // BLOCK: High-confidence overlap → DO NOT append, return existing entry
+    if (overlapBlocked) {
+        return {
+            body,
+            action: 'overlap_blocked',
+            contradiction,
+            overlapWarning,
+            overlappingEntry,
+            existingEntryTitles
+        };
     }
 
     // Append new content at END of section (before next major section)
@@ -472,10 +500,12 @@ export function appendToSection(body, sectionName, newContent) {
     const after = body.substring(sectionEnd);
     const result = {
         body: before + updatedSection + '\n' + after,
-        action: 'section_appended'
+        action: 'section_appended',
+        existingEntryTitles
     };
     if (contradiction) result.contradiction = contradiction;
     if (overlapWarning) result.overlapWarning = overlapWarning;
+    if (overlappingEntry) result.overlappingEntry = overlappingEntry;
     return result;
 }
 

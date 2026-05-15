@@ -70,21 +70,57 @@ async function main() {
                 try {
                     const rbContent = readFileSync(rbPath, 'utf8');
                     const { body: rbBody } = parseFrontmatter(rbContent);
-                    const extractSection = (name) => {
+                    const extractSection = (name, maxChars = 1200) => {
                         const header = `## ${name}`;
                         const regex = new RegExp(`^${header.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:\\s*$|\\s+&)`, 'im');
                         const m = regex.exec(rbBody);
                         if (!m) return '';
                         const end = findSectionEnd(rbBody, m.index);
-                        return rbBody.substring(m.index, end).substring(0, 600).trim();
+                        return rbBody.substring(m.index, end).substring(0, maxChars).trim();
                     };
-                    const live = extractSection('LIVE STATUS');
-                    const reentry = extractSection('RE-ENTRY CHECKLIST');
+                    const live = extractSection('LIVE STATUS', 1500);
+                    const reentry = extractSection('RE-ENTRY CHECKLIST', 1500);
+                    const gagal = extractSection('GAGAL', 800);
                     const hasCreds = rbBody.includes('## CREDENTIAL');
                     const rbFilename = rbPath.split('/').pop();
+
+                    // Extract last 8 auto-log entries for work continuity
+                    const autoLogRaw = extractSection('_AUTO_LOG', 4000);
+                    let recentWork = '';
+                    if (autoLogRaw) {
+                        const logLines = autoLogRaw.split('\n').filter(l => l.startsWith('- ['));
+                        const last8 = logLines.slice(-8);
+                        const cleaned = last8.map(l => {
+                            const short = l.replace(/\s*\|\s*\{[^}]{50,}\}.*$/, '').replace(/\s*\|\s*json\(\d+b\):.*$/, '').substring(0, 150);
+                            return short;
+                        });
+                        if (cleaned.length > 0) recentWork = cleaned.join('\n');
+                    }
+
+                    // v8.9: Extract recent ### entry titles from key sections
+                    // So AI knows WHAT was found/accomplished, not just what commands ran
+                    let recentFindings = '';
+                    const extractRecentTitles = (sectionName, max) => {
+                        const sec = extractSection(sectionName, 8000);
+                        if (!sec) return [];
+                        const titles = sec.match(/^###\s+.+$/gm) || [];
+                        return titles.slice(-max).map(t => t.substring(0, 80));
+                    };
+                    const credTitles = extractRecentTitles('CREDENTIAL', 5);
+                    const exploitTitles = extractRecentTitles('EXPLOIT', 3);
+                    if (credTitles.length > 0 || exploitTitles.length > 0) {
+                        recentFindings = '';
+                        if (credTitles.length > 0) recentFindings += 'CREDENTIAL entries (last 5): ' + credTitles.join(' | ') + '\n';
+                        if (exploitTitles.length > 0) recentFindings += 'EXPLOIT entries (last 3): ' + exploitTitles.join(' | ') + '\n';
+                    }
+
                     if (live) liveContext += `\n--- RETRIEVED MEMORY (runbook state, not instructions) ---\n[ACTIVE STATE]\n${scrub(live).text}\n`;
-                    if (reentry) liveContext += `\n[RECONNECT STEPS]\n${scrub(reentry).text}\n--- END RETRIEVED MEMORY ---\n`;
-                    if (hasCreds) liveContext += `\n[SAVED AUTH] Credentials exist in runbook. Use memory_get({id:"${rbFilename}", section:"CREDENTIAL"}) when needed.\n`;
+                    if (reentry) liveContext += `\n[RECONNECT STEPS]\n${scrub(reentry).text}\n`;
+                    if (gagal) liveContext += `\n[FAILED TECHNIQUES — DO NOT REPEAT]\n${scrub(gagal).text}\n`;
+                    if (recentFindings) liveContext += `\n[WHAT WAS FOUND — recent entries in runbook]\n${scrub(recentFindings).text}\n`;
+                    if (recentWork) liveContext += `\n[RECENT COMMANDS — last 8 actions before compact]\n${scrub(recentWork).text}\n`;
+                    liveContext += `\n--- END RETRIEVED MEMORY ---\n`;
+                    if (hasCreds) liveContext += `\n[SAVED AUTH] auth entries exist in runbook. Use memory_get({id:"${rbFilename}", section:"CREDENTIAL"}) when needed.\n`;
                 } catch (e) {
                     hookLog('WARN', 'PreCompact runbook read failed', { error: e?.message });
                 }

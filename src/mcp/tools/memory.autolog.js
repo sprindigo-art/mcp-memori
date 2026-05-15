@@ -155,7 +155,9 @@ function splitAndRotate(body, runbookFilename) {
             archiveOldEntries(runbookFilename, oldEntries);
         }
         const rotationMarker = `[${new Date().toISOString().split('T')[0]}] _AUTO_LOG rotated, older entries archived to ${ARCHIVE_DIR}\n`;
-        autolog = header + rotationMarker + trimmedKeep;
+        // v8.9: Sanitize ## headers that may remain after rotation cut mid-entry
+        const sanitizedKeep = trimmedKeep.replace(/^(#{1,6} )/gm, '  $1');
+        autolog = header + rotationMarker + sanitizedKeep;
         rotated = true;
         logger.info('AUTOLOG: Rotated section to keep size under limit', { newSize: autolog.length, archived: oldEntries.length });
     }
@@ -282,8 +284,11 @@ export async function execute(params) {
         const { preserved, autolog, rotated } = splitAndRotate(cleanBody, runbookFilename);
 
         // 4. Format new entry with timestamp + tool + event
+        // v8.9: Sanitize ## headers in entry to prevent section structure corruption
+        // Command stdout may contain "## SECTION" at line start → isMajorSection treats as real boundary
+        const sanitizedEntry = entry.trim().replace(/^(#{1,6} )/gm, '  $1');
         const ts = new Date().toISOString().replace('T', ' ').substring(0, 19);
-        const newEntry = `- [${ts}] [${event_type}/${tool_name}] ${entry.trim()}`;
+        const newEntry = `- [${ts}] [${event_type}/${tool_name}] ${sanitizedEntry}`;
 
         // 5. Anti-duplicate: skip if last N entries contain identical content
         if (isDuplicate(autolog, newEntry)) {
@@ -322,10 +327,6 @@ export async function execute(params) {
         // so no other writer can race us between read and write.
         const finalContent = buildFrontmatter(meta) + newBody.trim() + '\n';
         const tmpPath = filepath + '.tmp';
-        const bakPath = filepath + '.bak';
-        if (existsSync(filepath)) {
-            try { copyFileSync(filepath, bakPath); } catch {}
-        }
         writeFileSync(tmpPath, finalContent, 'utf8');
         renameSync(tmpPath, filepath);
 

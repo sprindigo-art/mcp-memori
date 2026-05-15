@@ -444,15 +444,28 @@ export async function execute(params) {
                         const raw = readFileSync(filepath, 'utf8');
                         const { meta, body } = parseFrontmatter(raw);
 
-                        const { body: newBody, action: appendAction, contradiction, overlapWarning } = appendToSection(body, item.append_to_section, content);
+                        const appendResult = appendToSection(body, item.append_to_section, content);
+                        const { body: newBody, action: appendAction, contradiction, overlapWarning, overlappingEntry, existingEntryTitles } = appendResult;
 
                         if (contradiction) {
                             contradictions.push(`⚠️ CONTRADICTION in ## ${item.append_to_section} of ${actualFilename}: ${contradiction}`);
                         }
                         if (overlapWarning) {
-                            reminders.push(overlapWarning);
+                            contradictions.push(overlapWarning);
                         }
 
+                        if (appendAction === 'overlap_blocked') {
+                            const matchedTitle = (overlappingEntry || '').match(/^###\s+(.+)/m)?.[1] || '';
+                            results.push({
+                                id: actualFilename, version: meta.version || 1, status: 'blocked',
+                                action: 'overlap_blocked', section: item.append_to_section, filepath,
+                                existing_entry: overlappingEntry || '',
+                                existing_titles: existingEntryTitles || [],
+                                fix_update: matchedTitle ? `memory_upsert({items:[{title:"${item.title}", replace_entry:"### ${matchedTitle}", content:"DATA BARU DISINI"}]})` : null,
+                                fix_explanation: `BLOCKED karena entry mirip sudah ada. INI BUKAN BUG. Pilih salah satu:\n1. UPDATE entry lama: gunakan replace_entry:"### ${matchedTitle || 'TITLE_EXISTING'}"\n2. Entry genuinely BARU (IP/service BEDA): coba append_to_section lagi dengan content yang tidak overlap — AKAN LOLOS\n3. JANGAN bypass pakai Write/Edit/Bash ke file .md`
+                            });
+                            continue;
+                        }
                         if (appendAction === 'skipped_duplicate' || appendAction === 'skipped_near_duplicate') {
                             results.push({
                                 id: actualFilename, version: meta.version || 1, status: 'active',
@@ -490,7 +503,8 @@ export async function execute(params) {
                         results.push({
                             id: actualFilename, version: meta.version, status: 'active',
                             action: appendAction, section: item.append_to_section, filepath,
-                            verified_total_chars: verifiedChars
+                            verified_total_chars: verifiedChars,
+                            existing_entries: (existingEntryTitles || []).slice(0, 10)
                         });
                         continue;
                     } finally {

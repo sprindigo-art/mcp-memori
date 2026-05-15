@@ -398,6 +398,21 @@ export async function execute(params) {
             } catch {}
         }
 
+        // v8.9: Post-filter merged results by required_tags (AND logic)
+        // Vector results bypass FTS tag filter; enforce here after enrichment populates item.tags
+        if (requiredTags.length > 0) {
+            mergedResults = mergedResults.filter(item => {
+                const itemTags = (item.tags || []).map(t => (t || '').toLowerCase());
+                return requiredTags.every(rt => itemTags.includes(rt.toLowerCase()));
+            });
+        }
+        if (tags.length > 0) {
+            mergedResults = mergedResults.filter(item => {
+                const itemTags = (item.tags || []).map(t => (t || '').toLowerCase());
+                return tags.some(t => itemTags.includes(t.toLowerCase()));
+            });
+        }
+
         // v7.0: Apply reranking with target-tag boost
         const reranked = rerankResults(mergedResults, searchQuery);
 

@@ -147,7 +147,9 @@ async function main() {
         const respLower = (responseSummary || '').toLowerCase();
         const hasMeaningfulData = /password[:\s]|passwd[:\s]|credential|root@|uid=0|www-data|reverse.?shell|connect.?back|shell.?gained|rce.?confirm|success.*exploit|exploit.*success|gagal|failed|blocked|patched|permission.?denied|access.?denied|upload.?success|webshell|persistence|privilege.?escalat|root.?access|superuser|\.env|api.?key|token[:\s]|secret[:\s]/i.test(respLower);
 
-        if (hasMeaningfulData && counter > 0) {
+        const isMemoryReadTool = /^(mcp__mcp-memori__)?(memory_search|memory_get|memory_list|memory_stats|memory_verify|memory_timeline)$/i.test(toolName);
+
+        if (hasMeaningfulData && counter > 0 && !isMemoryReadTool) {
             // Meaningful data detected — warn immediately
             const dataType = respLower.includes('password') || respLower.includes('credential') || respLower.includes('.env') ? 'CREDENTIAL'
                 : respLower.includes('root@') || respLower.includes('uid=0') || respLower.includes('superuser') ? 'PRIVILEGE ESCALATION'
