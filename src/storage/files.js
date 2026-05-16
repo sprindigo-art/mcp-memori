@@ -308,6 +308,8 @@ export function appendToSection(body, sectionName, newContent) {
     // Everything else (## TARGET:, ## DATE:, ## METHOD:, ## CREDENTIALS:, etc) → ###
     newContent = newContent.replace(/^(##) (?!(?:RECON|CREDENTIAL|EXPLOIT|GAGAL|LIVE STATUS|RE-?ENTRY CHECKLIST|SESSION LOG|_AUTO_LOG|_CHANGELOG|INFO|PERSISTENCE)\s*$)/gim, '### ');
 
+    let overlapWarning = null;
+
     // FILE-WIDE exact match FIRST — before section existence check
     // Catches cross-section duplicates even when target section doesn't exist yet
     if (body.includes(newContent.trim())) {
@@ -315,6 +317,7 @@ export function appendToSection(body, sectionName, newContent) {
     }
 
     // FILE-WIDE near-duplicate check for multi-line content — before section existence
+    // Exception: if unmatched lines contain IPs not in body → different target, allow
     const preLines = newContent.trim().split('\n').map(l => l.trim()).filter(l => l.length > 10);
     if (preLines.length >= 2) {
         const bodyLower = body.toLowerCase();
@@ -325,7 +328,12 @@ export function appendToSection(body, sectionName, newContent) {
             return core.length >= 40 && bodyLower.includes(core);
         });
         if (preMatched.length / preLines.length >= 0.5) {
-            return { body, action: 'skipped_near_duplicate', match_ratio: Math.round((preMatched.length / preLines.length) * 100) };
+            const preUnmatched = preLines.filter(l => !preMatched.includes(l));
+            const preUnmatchedIPs = preUnmatched.flatMap(l => l.match(/\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/g) || []);
+            const preHasDiffIP = preUnmatchedIPs.length > 0 && preUnmatchedIPs.some(ip => !bodyLower.includes(ip));
+            if (!preHasDiffIP) {
+                return { body, action: 'skipped_near_duplicate', match_ratio: Math.round((preMatched.length / preLines.length) * 100) };
+            }
         }
     }
 
@@ -355,6 +363,7 @@ export function appendToSection(body, sectionName, newContent) {
 
     // Anti-duplicate: NEAR-DUPLICATE — skip if >50% of lines already exist
     // Uses core-fragment matching: strip markdown/punctuation, match 40+ char core
+    // Exception: if unmatched lines contain IPs not in existing section → different target, allow
     const newLines = newContent.trim().split('\n').map(l => l.trim()).filter(l => l.length > 10);
     if (newLines.length >= 2) {
         const existingLower = existingSection.toLowerCase();
@@ -368,7 +377,14 @@ export function appendToSection(body, sectionName, newContent) {
         });
         const matchRatio = matchedLines.length / newLines.length;
         if (matchRatio >= 0.5) {
-            return { body, action: 'skipped_near_duplicate', match_ratio: Math.round(matchRatio * 100) };
+            const unmatchedLines = newLines.filter(l => !matchedLines.includes(l));
+            const unmatchedIPs = unmatchedLines.flatMap(l => l.match(/\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/g) || []);
+            const hasDifferentIP = unmatchedIPs.length > 0 && unmatchedIPs.some(ip => !existingLower.includes(ip));
+            if (hasDifferentIP) {
+                overlapWarning = `⚠️ NEAR-DUPLICATE WARNING: ${Math.round(matchRatio * 100)}% lines match tapi IP beda (${unmatchedIPs[0]}) — kemungkinan teknik sama di target beda. Data TETAP ditulis.`;
+            } else {
+                return { body, action: 'skipped_near_duplicate', match_ratio: Math.round(matchRatio * 100) };
+            }
         }
     }
 
@@ -427,7 +443,6 @@ export function appendToSection(body, sectionName, newContent) {
     }
 
     // v8.9: Overlap detection — BLOCK high-confidence overlap, WARN low-confidence
-    let overlapWarning = null;
     let overlapBlocked = false;
     let overlappingEntry = null;
     const contentLower = stampedContent.toLowerCase();
@@ -437,19 +452,26 @@ export function appendToSection(body, sectionName, newContent) {
     const identifiers = [...newPaths.slice(0, 5), ...newIPs.slice(0, 3)];
 
     if (identifiers.length > 0) {
-        const entryBlocks = existingSection.split(/(?=^###\s)/m).filter(b => b.startsWith('###'));
+        const entryBlocks = existingSection.split(/(?=^(?:\[\d{4}[^\]]*\]\s*)?###\s)/m).filter(b => /^(?:\[\d{4}[^\]]*\]\s*)?###\s/.test(b));
         for (const block of entryBlocks) {
             const blockLower = block.toLowerCase();
-            const hits = identifiers.filter(id => blockLower.includes(id)).length;
+            const matchedIds = identifiers.filter(id => blockLower.includes(id));
+            const hits = matchedIds.length;
             if (hits >= 2) {
-                const entryTitle = (block.match(/^###\s+(.+)/m) || ['', 'unknown'])[1];
-                overlapWarning = `🛑 OVERLAP BLOCKED: Content share ${hits} identifiers (${identifiers.filter(id => blockLower.includes(id)).slice(0, 3).join(', ')}) dengan existing "### ${entryTitle.substring(0, 50)}". FIX: replace_entry:"### ${entryTitle.substring(0, 60)}" untuk UPDATE entry ini. Entry LAIN yang genuinely baru (IP/service beda) TETAP bisa di-append.`;
-                overlapBlocked = true;
-                overlappingEntry = block.substring(0, 500);
-                break;
+                const entryTitle = (block.match(/^(?:\[\d{4}[^\]]*\]\s*)?###\s+(.+)/m) || ['', 'unknown'])[1];
+                const ipOverlap = matchedIds.some(id => /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(id));
+                if (ipOverlap) {
+                    overlapWarning = `🛑 OVERLAP BLOCKED: Content share ${hits} identifiers incl. IP (${matchedIds.slice(0, 3).join(', ')}) dengan existing "### ${entryTitle.substring(0, 50)}". FIX: replace_entry:"### ${entryTitle.substring(0, 60)}" untuk UPDATE entry ini. Entry LAIN yang genuinely baru (IP beda) TETAP bisa di-append.`;
+                    overlapBlocked = true;
+                    overlappingEntry = block.substring(0, 500);
+                    break;
+                } else {
+                    overlapWarning = `⚠️ OVERLAP WARNING: Content share ${hits} path identifiers (${matchedIds.slice(0, 3).join(', ')}) dengan existing "### ${entryTitle.substring(0, 50)}" tapi IP BEDA — kemungkinan teknik sama di target beda. Cek apakah UPDATE atau genuinely baru.`;
+                    overlappingEntry = block.substring(0, 300);
+                }
             } else if (hits >= 1) {
-                const entryTitle = (block.match(/^###\s+(.+)/m) || ['', 'unknown'])[1];
-                overlapWarning = `⚠️ OVERLAP WARNING: Content share 1 identifier (${identifiers.filter(id => blockLower.includes(id))[0]}) dengan existing "### ${entryTitle.substring(0, 50)}". Cek apakah ini UPDATE (gunakan replace_entry) atau data genuinely baru.`;
+                const entryTitle = (block.match(/^(?:\[\d{4}[^\]]*\]\s*)?###\s+(.+)/m) || ['', 'unknown'])[1];
+                overlapWarning = `⚠️ OVERLAP WARNING: Content share 1 identifier (${matchedIds[0]}) dengan existing "### ${entryTitle.substring(0, 50)}". Cek apakah ini UPDATE (gunakan replace_entry) atau data genuinely baru.`;
                 overlappingEntry = block.substring(0, 300);
             }
         }
@@ -459,17 +481,24 @@ export function appendToSection(body, sectionName, newContent) {
         if (newTitleMatch) {
             const newWords = newTitleMatch[1].toLowerCase().replace(/[^a-z0-9\s]/g, '').trim().split(/\s+/).filter(w => w.length >= 3);
             if (newWords.length >= 1) {
-                const existingTitles = existingSection.match(/^###\s+.+$/gm) || [];
+                const existingTitles = (existingSection.match(/^(?:\[\d{4}[^\]]*\]\s*)?###\s+.+$/gm) || []).map(t => t.replace(/^\[\d{4}[^\]]*\]\s*/, ''));
                 const minOverlap = newWords.length === 1 ? 1 : 2;
                 for (const entry of existingTitles) {
                     const entryWords = entry.replace(/^###\s+/, '').toLowerCase().replace(/[^a-z0-9\s]/g, '').trim().split(/\s+/).filter(w => w.length >= 3);
                     const overlap = newWords.filter(w => entryWords.includes(w)).length;
                     if (overlap >= minOverlap && overlap / Math.max(newWords.length, 1) >= 0.5) {
-                        overlapWarning = `🛑 OVERLAP BLOCKED: Entry title "${newTitleMatch[1].substring(0, 60)}" ≥50% word match existing "${entry.substring(0, 60)}". FIX: replace_entry:"${entry.substring(0, 60)}" untuk UPDATE. Entry LAIN yang genuinely baru TETAP bisa di-append.`;
-                        overlapBlocked = true;
-                        const entryBlocks2 = existingSection.split(/(?=^###\s)/m).filter(b => b.startsWith('###'));
+                        const entryBlocks2 = existingSection.split(/(?=^(?:\[\d{4}[^\]]*\]\s*)?###\s)/m).filter(b => /^(?:\[\d{4}[^\]]*\]\s*)?###\s/.test(b));
                         const matchedBlock = entryBlocks2.find(b => b.startsWith(entry));
                         overlappingEntry = matchedBlock ? matchedBlock.substring(0, 500) : entry;
+                        const existingIPs = [...new Set(((matchedBlock || '').match(/\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/g) || []))];
+                        const hasIPOverlap = newIPs.length > 0 && existingIPs.length > 0 && newIPs.some(ip => existingIPs.includes(ip));
+                        const hasDiffIP = newIPs.length > 0 && existingIPs.length > 0 && !hasIPOverlap;
+                        if (hasDiffIP) {
+                            overlapWarning = `⚠️ OVERLAP WARNING: Title "${newTitleMatch[1].substring(0, 60)}" mirip "${entry.substring(0, 60)}" tapi IP BEDA (new: ${newIPs[0]}, existing: ${existingIPs[0]}). Kemungkinan teknik sama di target beda — data TETAP ditulis.`;
+                        } else {
+                            overlapWarning = `🛑 OVERLAP BLOCKED: Entry title "${newTitleMatch[1].substring(0, 60)}" ≥50% word match existing "${entry.substring(0, 60)}". FIX: replace_entry:"${entry.substring(0, 60)}" untuk UPDATE. Entry LAIN yang genuinely baru TETAP bisa di-append.`;
+                            overlapBlocked = true;
+                        }
                         break;
                     } else if (overlap >= minOverlap && overlap / Math.max(newWords.length, 1) >= 0.3 && !overlapWarning) {
                         overlapWarning = `⚠️ OVERLAP WARNING: Entry "${newTitleMatch[1].substring(0, 60)}" mirip "${entry.substring(0, 60)}". Cek apakah UPDATE atau data baru.`;
@@ -480,7 +509,7 @@ export function appendToSection(body, sectionName, newContent) {
     }
 
     // Collect existing ### entry titles for response visibility
-    const existingEntryTitles = (existingSection.match(/^###\s+.+$/gm) || []).map(t => t.substring(0, 80));
+    const existingEntryTitles = (existingSection.match(/^(?:\[\d{4}[^\]]*\]\s*)?###\s+.+$/gm) || []).map(t => t.replace(/^\[\d{4}[^\]]*\]\s*/, '').substring(0, 80));
 
     // BLOCK: High-confidence overlap → DO NOT append, return existing entry
     if (overlapBlocked) {

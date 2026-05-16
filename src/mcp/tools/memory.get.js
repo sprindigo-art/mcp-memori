@@ -10,7 +10,7 @@ import { incrementAccessCount } from '../../storage/searchIndex.js';
 import logger from '../../utils/logger.js';
 import { LRUCache } from 'lru-cache';
 
-const MAX_OUTPUT_CHARS = 50000; // Reduced from 80K — Claude Code harness blocks >50K tool output
+const MAX_OUTPUT_CHARS = 20000; // 20K chars ≈ 30-35KB JSON after escaping — safely under 50KB harness limit
 
 /**
  * v7.0: LRU Cache for memory_get — reduces filesystem I/O
@@ -117,7 +117,7 @@ export const definition = {
         properties: {
             id: { type: 'string', description: 'Runbook ID (filename, e.g. RUNBOOK_target.com.md)' },
             offset: { type: 'number', description: 'Character offset to start reading from (default: 0)' },
-            limit: { type: 'number', description: 'Max characters to return (default: 80000)' },
+            limit: { type: 'number', description: 'Max characters to return (default: 20000). Harness truncates >50K JSON — 20K chars stays visible.' },
             section: { type: 'string', description: 'Read specific ## section by name (e.g. "CREDENTIAL", "EXPLOIT", "GAGAL"). Case-insensitive.' },
             search: { type: 'string', description: 'Filter ### entries containing this text. Use with section param to find specific entry in large section (e.g. search:"10.1.178.5" in section:"CREDENTIAL"). Returns only matching entries, not entire section.' },
             sections_list: { type: 'boolean', description: 'If true, return list of all major sections with their char positions instead of content. Useful for navigating large runbooks.' },
@@ -262,7 +262,7 @@ export async function execute(params) {
             if (search && search.trim()) {
                 const searchLower = search.trim().toLowerCase();
                 const keywords = searchLower.split(/\s+/).filter(w => w.length >= 2);
-                const entries = result.split(/(?=^### )/m);
+                const entries = result.split(/(?=^(?:\[\d{4}[^\]]*\]\s*)?### )/m);
                 let searchMatched;
                 if (keywords.length <= 1) {
                     searchMatched = entries.filter(entry => entry.toLowerCase().includes(searchLower));

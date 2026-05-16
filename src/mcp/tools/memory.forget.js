@@ -73,10 +73,12 @@ export function hasBeenRead(id) {
     // FULL read (entire content returned, no pagination) = OK
     if (entry.fullRead || entry.mode === 'full') return true;
 
-    // PARTIAL read (paginated, hasMore=true) = NOT enough alone
-    // Must combine with section reads or additional page reads to unlock
+    // PARTIAL read (paginated, hasMore=true) — AI called memory_get without section param
+    // This means AI initiated a full read but runbook was too large for single response.
+    // Allow unlock if AI received enough content to understand structure (>= 5KB).
+    // The reduced MAX_OUTPUT_CHARS (30K) ensures AI SEES the content (not <persisted-output>).
     if (entry.mode === 'partial') {
-        // Partial + section reads = OK (AI read some pages + sections)
+        if (entry.charsRead >= 5000) return true;
         if (entry.sectionsRead >= 2 && entry.charsRead > 3000) return true;
         return false;
     }

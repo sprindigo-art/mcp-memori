@@ -455,7 +455,7 @@ export async function execute(params) {
                         }
 
                         if (appendAction === 'overlap_blocked') {
-                            const matchedTitle = (overlappingEntry || '').match(/^###\s+(.+)/m)?.[1] || '';
+                            const matchedTitle = (overlappingEntry || '').match(/^(?:\[\d{4}[^\]]*\]\s*)?###\s+(.+)/m)?.[1] || '';
                             results.push({
                                 id: actualFilename, version: meta.version || 1, status: 'blocked',
                                 action: 'overlap_blocked', section: item.append_to_section, filepath,
@@ -691,9 +691,9 @@ export async function execute(params) {
                         const { meta, body } = parseFrontmatter(raw);
                         const searchTitle = item.replace_entry.replace(/^###\s*/, '').trim().toLowerCase();
 
-                        // Find ### entry by fuzzy title match (also catches mid-line ### from malformed appends)
-                        const entryRegex = /^###\s+.+$/gm;
-                        const midLineRegex = /(?<=.)###\s+.+$/gm;
+                        // Find ### entry by fuzzy title match (handles [YYYY-MM-DD] date prefix from appendToSection)
+                        const entryRegex = /^(?:\[\d{4}[^\]]*\]\s*)?###\s+.+$/gm;
+                        const midLineRegex = /(?<=.)(?:\[\d{4}[^\]]*\]\s*)?###\s+.+$/gm;
                         const allMatches = [];
                         let match;
                         while ((match = entryRegex.exec(body)) !== null) {
@@ -711,7 +711,7 @@ export async function execute(params) {
                         let secondBestScore = 0;
                         let secondBestTitle = '';
                         for (const entry of allMatches) {
-                            const entryTitle = entry.header.replace(/^###\s+/, '').trim().toLowerCase();
+                            const entryTitle = entry.header.replace(/^(?:\[\d{4}[^\]]*\]\s*)?###\s+/, '').trim().toLowerCase();
                             let score = 0;
                             if (entryTitle === searchTitle) score = 100;
                             else if (entryTitle.includes(searchTitle)) score = 80;
@@ -755,7 +755,7 @@ export async function execute(params) {
 
                         // Find entry end: next ### or next ## (major section)
                         const afterEntry = body.substring(bestMatch.index + bestMatch.title.length);
-                        const nextEntryMatch = afterEntry.match(/\n(?=### |\n## )/);
+                        const nextEntryMatch = afterEntry.match(/\n(?=(?:\[\d{4}[^\]]*\]\s*)?### |\n## )/);
                         const entryEnd = nextEntryMatch
                             ? bestMatch.index + bestMatch.title.length + nextEntryMatch.index
                             : body.length;
