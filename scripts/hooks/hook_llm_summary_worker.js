@@ -132,7 +132,7 @@ function appendLlmSummaryToActivityLog(filepath, summaryText, entryCount) {
             }
         }
         // Max 5 entries — remove oldest if exceeding
-        const entryCount2 = (sectionBlock.match(/### \[/g) || []).length;
+        const entryCount2 = (sectionBlock.match(/(?:^|\n)(?:\[\d{4}[^\]]*\]\s*)?### \[/g) || []).length;
         if (entryCount2 >= 5) {
             const lines = sectionBlock.split('\n');
             let kept = [], count = 0;

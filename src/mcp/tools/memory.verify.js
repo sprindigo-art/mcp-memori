@@ -71,18 +71,18 @@ function findMatchingEntries(body, claim, maxEntries = 5) {
     const claimLower = claim.toLowerCase();
     const claimWords = claimLower.split(/[\s\-_.,]+/).filter(w => w.length >= 3);
     const entries = [];
-    const entryRegex = /^### .+$/gm;
+    const entryRegex = /^(?:\[\d{4}[^\]]*\]\s*)?### .+$/gm;
     let match;
     while ((match = entryRegex.exec(body)) !== null) {
         const title = match[0];
         const afterEntry = body.substring(match.index + title.length);
-        const nextMatch = afterEntry.match(/\n(?=### |\n## )/);
+        const nextMatch = afterEntry.match(/\n(?=(?:\[\d{4}[^\]]*\]\s*)?### |\n## )/);
         const end = nextMatch ? match.index + title.length + nextMatch.index : body.length;
         const entryText = body.substring(match.index, end);
         const entryLower = entryText.toLowerCase();
         const wordHits = claimWords.filter(w => entryLower.includes(w)).length;
         if (wordHits >= Math.max(1, Math.floor(claimWords.length * 0.3))) {
-            entries.push({ title: title.replace(/^### /, ''), text: entryText, wordHits });
+            entries.push({ title: title.replace(/^(?:\[\d{4}[^\]]*\]\s*)?### /, ''), text: entryText, wordHits });
         }
     }
     entries.sort((a, b) => b.wordHits - a.wordHits);
