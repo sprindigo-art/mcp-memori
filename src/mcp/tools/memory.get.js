@@ -323,13 +323,41 @@ export async function execute(params) {
 
         // MODE 4: Paginated read (default) — FULL content read = unlock upsert
         const effectiveLimit = Math.min(limit, MAX_OUTPUT_CHARS);
+
+        // v8.9.1: LARGE RUNBOOK GUARD — if runbook > 50KB AND no explicit offset/limit requested,
+        // return SECTION OVERVIEW + UNLOCK only (no body content). Forces AI to use Read tool.
+        // This prevents AI from claiming "sudah baca utuh" after seeing only 8% of content.
+        // AI can still get content via: section param, explicit limit, offset, or Read .md
+        const LARGE_RUNBOOK_THRESHOLD = 50000;
+        const isDefaultRead = offset === 0 && limit === MAX_OUTPUT_CHARS;
+        if (totalChars > LARGE_RUNBOOK_THRESHOLD && isDefaultRead) {
+            confirmRead(item.id, 'partial', 5000);
+            try { incrementAccessCount(item.id); } catch {}
+
+            const sectionOverview = majorSections.map(s => {
+                const size = s.content ? s.content.length : 0;
+                const bodyOnly = (s.content || '').replace(/^##[^\n]*\n/, '').trim();
+                const preview = bodyOnly.substring(0, 120).replace(/\n/g, ' ').trim();
+                const entryCount = (s.content || '').match(/^(?:\[\d{4}[^\]]*\]\s*)?###\s+/gm)?.length || 0;
+                return `- **${s.cleanName}** (~${Math.round(size/1024)}KB, ${entryCount} entries) — ${preview}${bodyOnly.length > 120 ? '...' : ''}`;
+            }).join('\n');
+
+            return {
+                __plaintext: true,
+                text: `# ${item.title} — UNLOCK + OVERVIEW\n\n`
+                    + `⛔ RUNBOOK BESAR (${Math.round(totalChars/1024)}KB) — content TIDAK ditampilkan di sini.\n`
+                    + `✅ Hard-block UNLOCKED — upsert diizinkan.\n`
+                    + `📖 WAJIB baca ISI via: \`Read /home/kali/Desktop/mcp-memori/runbooks/${item.id}\` bertahap (offset/limit)\n`
+                    + `   ATAU: \`memory_get({id:"${item.id}", section:"CREDENTIAL"})\` untuk section spesifik\n`
+                    + `⛔ DILARANG claim "sudah baca utuh" — memory_get ini HANYA unlock, BUKAN baca isi.\n\n`
+                    + `## Section Overview (${majorSections.length} sections, ${totalChars} chars total)\n${sectionOverview}`
+            };
+        }
+
         const chunk = fullContent.substring(offset, offset + effectiveLimit);
         const hasMore = (offset + effectiveLimit) < totalChars;
         const remaining = totalChars - offset - effectiveLimit;
 
-        // v8.8: Only mark 'full' if ALL content returned. If paginated (hasMore),
-        // mark 'partial' — AI must read more before upsert is allowed.
-        // This prevents: memory_get → "Output too large" → immediate upsert without reading.
         confirmRead(item.id, hasMore ? 'partial' : 'full', chunk.length);
 
         // v7.1: Track usefulness — increment access count in search index
