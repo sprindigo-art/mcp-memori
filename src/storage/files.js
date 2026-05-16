@@ -337,7 +337,14 @@ export function appendToSection(body, sectionName, newContent) {
         }
     }
 
-    const match = headerRegex.exec(body);
+    let match = headerRegex.exec(body);
+    if (!match) {
+        const inlineIdx = body.indexOf(sectionHeader);
+        if (inlineIdx > 0) {
+            body = body.substring(0, inlineIdx) + '\n' + body.substring(inlineIdx);
+            match = headerRegex.exec(body);
+        }
+    }
 
     if (!match) {
         let createContent = newContent.trim();

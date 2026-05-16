@@ -617,7 +617,15 @@ export async function execute(params) {
                         const sectionHeader = item.replace_section.startsWith('##') ? item.replace_section : `## ${item.replace_section}`;
                         const escapedHeader = sectionHeader.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
                         const headerRegex = new RegExp(`^${escapedHeader}(?:\\s*$|\\s+&)`, 'im');
-                        const headerMatch = headerRegex.exec(body);
+                        let headerMatch = headerRegex.exec(body);
+                        if (!headerMatch) {
+                            const inlineIdx = body.indexOf(sectionHeader);
+                            if (inlineIdx > 0) {
+                                body = body.substring(0, inlineIdx) + '\n' + body.substring(inlineIdx);
+                                headerMatch = headerRegex.exec(body);
+                                if (headerMatch) logger.info('HEALED corrupted section header (missing newline)', { section: item.replace_section, pos: inlineIdx });
+                            }
+                        }
 
                         let newBody;
                         if (headerMatch) {
@@ -639,6 +647,13 @@ export async function execute(params) {
                             // Strip duplicate section header from content if user included it
                             const contentHeaderRegex = new RegExp(`^##\\s+${item.replace_section.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\n`, 'i');
                             const cleanContent = content.replace(contentHeaderRegex, '');
+
+                            // TRUNCATION GUARD: warn if new content < 30% of old (likely truncated)
+                            const oldBody = oldSection.replace(/^##[^\n]*\n/, '').trim();
+                            if (oldBody.length > 200 && cleanContent.trim().length < oldBody.length * 0.3) {
+                                logger.warn('REPLACE_SECTION TRUNCATION WARNING', { section: item.replace_section, old_chars: oldBody.length, new_chars: cleanContent.trim().length });
+                                contradictions.push(`⚠️ TRUNCATION WARNING: New content (${cleanContent.trim().length} chars) is <30% of old (${oldBody.length} chars) for ## ${item.replace_section}. Kemungkinan data terpotong. Cek content sebelum confirm.`);
+                            }
 
                             newBody = body.substring(0, sectionStart) + `${sectionHeader}\n${cleanContent}\n\n` + body.substring(sectionEnd);
                             logger.info('SECTION REPLACED', { filename: actualFilename, section: item.replace_section, old_size: oldSection.length, new_size: content.length });
