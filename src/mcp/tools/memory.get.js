@@ -346,10 +346,12 @@ export async function execute(params) {
                 __plaintext: true,
                 text: `# ${item.title} — UNLOCK + OVERVIEW\n\n`
                     + `⛔ RUNBOOK BESAR (${Math.round(totalChars/1024)}KB) — content TIDAK ditampilkan di sini.\n`
-                    + `✅ Hard-block UNLOCKED — upsert diizinkan.\n`
+                    + `✅ Hard-block UNLOCKED — upsert diizinkan SETELAH baca ISI.\n`
                     + `📖 WAJIB baca ISI via: \`Read /home/kali/Desktop/mcp-memori/runbooks/${item.id}\` bertahap (offset/limit)\n`
                     + `   ATAU: \`memory_get({id:"${item.id}", section:"CREDENTIAL"})\` untuk section spesifik\n`
-                    + `⛔ DILARANG claim "sudah baca utuh" — memory_get ini HANYA unlock, BUKAN baca isi.\n\n`
+                    + `🔍 Cari data spesifik: \`memory_search({query:"keyword", scope_id:"${item.id}"})\` atau \`memory_get({id:"${item.id}", section:"CREDENTIAL", search:"keyword"})\`\n`
+                    + `⛔ DILARANG claim "sudah baca utuh" — memory_get ini HANYA unlock, BUKAN baca isi.\n`
+                    + `⛔ DILARANG simpan tanpa baca ISI section dulu — cek existing entries sebelum append.\n\n`
                     + `## Section Overview (${majorSections.length} sections, ${totalChars} chars total)\n${sectionOverview}`
             };
         }

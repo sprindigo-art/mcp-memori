@@ -404,9 +404,9 @@ export async function execute(params) {
                     read_status: readStatus,
                     error: `BLOCKED: Runbook "${actualFilename}" sudah ada tapi BELUM dibaca cukup. `
                         + `Status: ${readStatus.reason}${readStatus.mode ? ` (mode=${readStatus.mode}, chars=${readStatus.charsRead || 0})` : ''}. `
-                        + `FIX: Jalankan memory_get({id:"${actualFilename}"}) tanpa section/sections_list untuk FULL read, `
-                        + `ATAU memory_get({id:"...", sections_list:true}) + memory_get({id:"...", section:"RELEVANT"}) untuk partial read. `
-                        + `Baru boleh upsert setelah benar-benar PAHAM isi runbook.`
+                        + `FIX: (1) memory_get({id:"${actualFilename}"}) TANPA section → UNLOCK. `
+                        + `(2) Read /home/kali/Desktop/mcp-memori/runbooks/${actualFilename} bertahap (offset/limit) → BACA ISI. `
+                        + `(3) Cek existing entries di section → data BARU atau UPDATE? Baru boleh upsert.`
                 });
                 continue;
             }

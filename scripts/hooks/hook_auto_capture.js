@@ -160,7 +160,7 @@ async function main() {
             process.stdout.write(JSON.stringify({
                 hookSpecificOutput: {
                     hookEventName: 'PostToolUse',
-                    additionalContext: `⚠️ WRITEBACK: ${dataType} terdeteksi di output. SIMPAN ke memori SEKARANG (memory_get lalu memory_upsert). Data: ${respLower.substring(0, 100)}`
+                    additionalContext: `⚠️ WRITEBACK: ${dataType} terdeteksi di output. SIMPAN ke memori SEKARANG. Alur: (1) memory_get UNLOCK, (2) baca ISI section yang relevan, (3) cek apakah data BARU atau sudah ada (NEW→append, UPDATE→replace_entry, SAMA→SKIP), (4) memory_upsert. DILARANG simpan tanpa cek existing.`
                 }
             }));
         } else if (counter >= 30 && counter % 10 === 0) {
