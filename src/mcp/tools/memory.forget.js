@@ -43,7 +43,10 @@ export function confirmRead(id, mode = 'full', charsRead = 0) {
     // Accumulate reads — partial + sections can upgrade to enough for unlock
     const newChars = (existing ? existing.charsRead : 0) + charsRead;
     const newSections = existing ? (existing.sectionsRead || 0) : 0;
-    const bestMode = mode === 'full' ? 'full' : (existing?.mode === 'partial' && mode === 'section') ? 'partial' : mode;
+    const bestMode = mode === 'full' ? 'full'
+        : (existing?.mode === 'overview' && mode === 'section') ? 'overview'
+        : (existing?.mode === 'partial' && mode === 'section') ? 'partial'
+        : mode;
 
     readConfirmations.set(id, {
         timestamp: now,
@@ -73,10 +76,15 @@ export function hasBeenRead(id) {
     // FULL read (entire content returned, no pagination) = OK
     if (entry.fullRead || entry.mode === 'full') return true;
 
-    // PARTIAL read (paginated, hasMore=true) — AI called memory_get without section param
-    // This means AI initiated a full read but runbook was too large for single response.
-    // Allow unlock if AI received enough content to understand structure (>= 5KB).
-    // For large runbooks (>50KB), memory_get returns overview only (no content) + unlock.
+    // OVERVIEW mode (large runbook >50KB, memory_get returned section names only, no content)
+    // NOT enough alone — AI must read at least 1 section to prove it has actual content
+    if (entry.mode === 'overview') {
+        if (entry.sectionsRead >= 1 && entry.charsRead >= 500) return true;
+        return false;
+    }
+
+    // PARTIAL read (paginated, hasMore=true) — AI called memory_get with explicit limit/offset
+    // Allow unlock if AI received enough content (>= 5KB)
     if (entry.mode === 'partial') {
         if (entry.charsRead >= 5000) return true;
         if (entry.sectionsRead >= 2 && entry.charsRead > 3000) return true;

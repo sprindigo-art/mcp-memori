@@ -331,7 +331,7 @@ export async function execute(params) {
         const LARGE_RUNBOOK_THRESHOLD = 50000;
         const isDefaultRead = offset === 0 && limit === MAX_OUTPUT_CHARS;
         if (totalChars > LARGE_RUNBOOK_THRESHOLD && isDefaultRead) {
-            confirmRead(item.id, 'partial', 5000);
+            confirmRead(item.id, 'overview', 0);
             try { incrementAccessCount(item.id); } catch {}
 
             const sectionOverview = majorSections.map(s => {
