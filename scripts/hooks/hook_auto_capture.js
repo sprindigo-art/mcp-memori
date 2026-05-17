@@ -145,7 +145,7 @@ async function main() {
 
         // Detect meaningful data in response that MUST be saved
         const respLower = (responseSummary || '').toLowerCase();
-        const hasMeaningfulData = /password[:\s]|passwd[:\s]|credential|root@|uid=0|www-data|reverse.?shell|connect.?back|shell.?gained|rce.?confirm|success.*exploit|exploit.*success|gagal|failed|blocked|patched|permission.?denied|access.?denied|upload.?success|webshell|persistence|privilege.?escalat|root.?access|superuser|\.env|api.?key|token[:\s]|secret[:\s]/i.test(respLower);
+        const hasMeaningfulData = /password[:\s]|passwd[:\s]|credential|root@|uid=0|www-data|reverse.?shell|connect.?back|shell.?gained|rce.?confirm|success.*exploit|exploit.*success|gagal|failed|blocked|patched|permission.?denied|access.?denied|upload.?success|webshell|persistence|privilege.?escalat|root.?access|superuser|\.env|api.?key|token[:\s]|secret[:\s]|open.?port|port\s+\d+.*open|service.?detect|version[:\s]|apache|nginx|mysql|openssh|endpoint|subnet|alive|host.?found|discover/i.test(respLower);
 
         const isMemoryReadTool = /^(mcp__mcp-memori__)?(memory_search|memory_get|memory_list|memory_stats|memory_verify|memory_timeline)$/i.test(toolName);
 
@@ -156,6 +156,7 @@ async function main() {
                 : respLower.includes('shell') || respLower.includes('rce') || respLower.includes('reverse') ? 'SHELL/RCE'
                 : respLower.includes('gagal') || respLower.includes('failed') || respLower.includes('denied') ? 'KEGAGALAN'
                 : respLower.includes('upload') || respLower.includes('webshell') || respLower.includes('persistence') ? 'PERSISTENCE'
+                : /open.?port|port\s+\d+.*open|service|version|apache|nginx|mysql|openssh|endpoint|subnet|alive|host.?found|discover/i.test(respLower) ? 'SCAN/RECON'
                 : 'DATA PENTING';
             process.stdout.write(JSON.stringify({
                 hookSpecificOutput: {
