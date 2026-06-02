@@ -1,8 +1,8 @@
-# MCP Memori v8.7
+# MCP Memori v8.9.2
 
 Production-grade MCP Memory Server for Claude Code — persistent runbook-based knowledge engine with hybrid search, lifecycle hooks, and anti-data-loss enforcement.
 
-**269 runbooks** | **35 MB** | **3,059 entities** | **4,926 links** | **23,423 observations** | **1,522 section embeddings**
+**366 runbooks** | **20.13 MB** | **4,061 entities** | **6,893 links** | **56,411 observations** | **746 section embeddings**
 
 ---
 
@@ -23,7 +23,7 @@ Claude Code has no persistent memory between sessions. Context is lost on every 
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                MCP Memori v8.7 — Runbook Engine             │
+│                MCP Memori v8.9.2 — Runbook Engine            │
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐         │
@@ -46,32 +46,31 @@ Claude Code has no persistent memory between sessions. Context is lost on every 
 │         │                │                │                 │
 │  ┌──────▼────────────────▼────────────────▼───────────────┐ │
 │  │             Runbook Files (.md)                        │ │
-│  │  269 files | 35 MB | YAML frontmatter                 │ │
+│  │  366 files | 20 MB | YAML frontmatter                 │ │
 │  │  Sections: CREDENTIAL, EXPLOIT, RECON, GAGAL, etc.    │ │
 │  │  Atomic writes (.tmp + rename) + .bak backup          │ │
 │  └───────────────────────────────────────────────────────┘ │
 │                                                             │
 │  ┌───────────┐  ┌────────────────┐  ┌──────────────────┐   │
 │  │ FTS5 BM25 │  │ Vector v2.0    │  │ Knowledge Graph  │   │
-│  │ noise-    │  │ per-SECTION    │  │ 3,059 entities   │   │
-│  │ filtered  │  │ 1,522 vectors  │  │ 4,926 links      │   │
+│  │ noise-    │  │ per-SECTION    │  │ 4,061 entities   │   │
+│  │ filtered  │  │ 746 vectors    │  │ 6,893 links      │   │
 │  │ porter    │  │ 384-dim local  │  │ 2-hop reasoning  │   │
 │  │ stemmer   │  │ all-MiniLM-L6  │  │                  │   │
 │  └───────────┘  └────────────────┘  └──────────────────┘   │
 │                                                             │
 │  ┌───────────────────────────────────────────────────────┐  │
-│  │ HOOKS (6 lifecycle events)                            │  │
+│  │ HOOKS (5 lifecycle events)                            │  │
 │  │ SessionStart:      inject target context + auto-log   │  │
 │  │ PostToolUse:       auto-capture + writeback counter   │  │
 │  │ UserPromptSubmit:  auto-inject relevant memories      │  │
 │  │ Stop:             template session summary + rotate   │  │
 │  │ PreCompact:       identity + rules + target context   │  │
-│  │ LLM Summary:      opt-in background worker           │  │
 │  └───────────────────────────────────────────────────────┘  │
 │                                                             │
 │  ┌───────────────┐  ┌───────────┐  ┌───────────────────┐   │
 │  │ Contradiction │  │ Provenance│  │ Per-Session       │   │
-│  │ 26 pairs      │  │ auto-date │  │ Target Isolation  │   │
+│  │ 32 pairs      │  │ auto-date │  │ Target Isolation  │   │
 │  │ bidirectional │  │ [YYYY-MM] │  │ multi-instance    │   │
 │  │ EN+ID         │  │           │  │                   │   │
 │  └───────────────┘  └───────────┘  └───────────────────┘   │
@@ -103,24 +102,46 @@ Query → ┌─ FTS5 BM25 (noise-filtered, porter stemmer) ─────┐
 
 ### Storage & Safety
 - **Runbook-based** — `.md` files with YAML frontmatter, human-readable, git-friendly
-- **Hard-block** — must read runbook before writing (10 min expiry, >500 chars threshold)
-- **Anti-duplicate 3-layer** — exact substring + 60% near-duplicate + SHA-256 content hash (500 chars + length, 10 min window)
-- **Contradiction detection** — 26 state pairs bidirectional (EN+ID: alive/dead, success/failed, berhasil/gagal, etc.) with inline warnings
+- **Hard-block** — must read runbook before writing (10 min expiry, full read or 3+ sections >2000 chars)
+- **Anti-duplicate 3-layer** — exact substring + 50% near-duplicate + SHA-256 content hash (500 chars + length, 10 min window)
+- **Overlap detection** — title ≥70% word match + IP same = BLOCKED (data not written); 50-69% = WARN. Response includes existing_entry + fix command
+- **Contradiction detection** — 32 state pairs bidirectional (EN+ID: alive/dead, success/failed, berhasil/gagal, online/offline, etc.) with inline warnings
 - **Pre-write verification** — `memory_verify` tool checks duplicate, contradiction, staleness before write (read-only)
 - **Atomic writes** — `.tmp` + rename (POSIX atomic) + `.bak` backup + O_EXCL file locking
 - **Section-lock** — `replace_section` restricted to LIVE STATUS / RE-ENTRY only
 - **Fuzzy title match** — domain-aware partial match + Jaccard similarity
 - **Replace entry** — fuzzy-match `### title` with ambiguity guard (gap < 15 = blocked, prevents wrong overwrite)
 
-### Lifecycle Hooks (6 events)
-- **PostToolUse** — auto-capture every tool call to `_AUTO_LOG` + SQLite observations + writeback counter warning (>10 calls without save) + per-session target tracking
-- **SessionStart** — inject LIVE STATUS + RE-ENTRY + recent auto-log entries; post-compaction re-authorization with identity + rules inline
-- **UserPromptSubmit** — auto-inject 2 most relevant memories when prompt contains domain/IP/CVE/product signals; snippets sanitized (credentials redacted); file extensions and code identifiers excluded from false triggers
+### Lifecycle Hooks (5 events)
+- **PostToolUse** — auto-capture every tool call to `_AUTO_LOG` (## sanitized) + SQLite observations + writeback counter warning (>30 action calls without save) + per-session target tracking + smart writeback detection (credential/shell/RCE/failure/persistence/subnet)
+- **SessionStart** — inject LIVE STATUS + RE-ENTRY + OBJECTIVE + recent 12 auto-log entries; post-compaction re-authorization with identity + rules inline; data injected ORIGINAL without keyword substitution
+- **UserPromptSubmit** — auto-inject 2 most relevant memories when prompt contains domain/IP/CVE/product signals; active target reminder for generic prompts; file extensions and code identifiers excluded from false triggers
 - **Stop** — template-based session summary appended to `## SESSION LOG`; auto-rotate >50KB (keep last 10, archive rest); lock-protected atomic write
-- **PreCompact** — fsync flush + compaction marker + JANDA AI identity + rules + LIVE STATUS/RE-ENTRY + safe credential pointer in `newCustomInstructions` (raw credentials NOT injected)
-- **LLM Summary Worker** — opt-in (`MCP_MEMORI_LLM_SUMMARY=1`) background AI summary
+- **PreCompact** — fsync flush + compaction marker + identity + rules + LIVE STATUS(2000 chars) + RE-ENTRY(1500) + GAGAL(800) + recent 12 auto-log + CREDENTIAL/EXPLOIT entry titles + safe credential pointer in `newCustomInstructions`
 
-### v8.7 (Latest)
+### v8.9.2 (Latest)
+- **Overlap detection BLOCK** — title ≥70% word match + IP same OR 2+ identifiers including IP = `overlap_blocked` (data NOT written). 50-69% = WARN (data written). Response includes existing_entry + fix_update command
+- **`existing_entries` in response** — every successful append returns list of all `### title` in section (including date-prefixed entries) so AI sees what already exists
+- **Anti-bypass enforcement** — overlap_blocked is protection, not a bug. CLAUDE.md rules explicitly forbid Write/Edit/Bash bypass to runbook .md files
+- **PreCompact enhanced** — LIVE STATUS(2000) + RE-ENTRY(1500) + GAGAL(800) + recent 12 auto-log + CREDENTIAL/EXPLOIT entry titles (was 600+600 only)
+- **Writeback false positive guard** — memory_search/get results containing trigger keywords no longer fire WRITEBACK warning
+- **Auto-log ## header sanitization** — command output containing `## SECTION` gets indented before writing to _AUTO_LOG (prevents section boundary corruption)
+- **ACTIVITY SUMMARY** added to `MAJOR_SECTION_PREFIXES` whitelist
+- **required_tags post-filter** — required_tags AND filter now applies to ALL results (FTS5 + vector), not just FTS5
+- **sanitizeTriggers REMOVED** — all hook output now injects data ORIGINAL without keyword substitution (credential, exploit, reverse shell, persistence retain original terminology for better post-compaction recovery)
+- **sections_list no longer downgrades unlock state** — calling sections_list after memory_get(unlock) no longer resets read confirmation
+- **Contradiction pairs** — 26 → 32 bidirectional (added active/inactive, online/offline, stopped/running, disabled/enabled, unprivileged/root)
+
+### v8.8
+- **Dedup threshold tightened** — near-duplicate 60% → 50%, core fragment 25 → 40 chars
+- **## downgrade regex** — non-standard headers (`## TARGET:`, `## DATE:`) forced to `###`
+- **Hard-block stricter** — section-only read requires 3+ sections >2000 chars; sections_list alone NOT enough
+- **MAX_OUTPUT_CHARS** — 80K → 50K (harness truncates >50K, so 80K never reached AI)
+- **Search ranking fix** — TEKNIK depriority only for domain/IP queries; COMMON_TECHNIQUE_WORDS no longer kills technique searches
+- **Anti-temp-file rule** — post-compaction AI must Read .md directly, not harness-generated tool-results/*.json
+- **scope_id vector filter** — vector results now filtered by scope_id (was FTS5-only)
+
+### v8.7
 - **`memory_verify`** — read-only pre-write check: duplicate, near-duplicate, contradiction, staleness detection. Deterministic target resolution (RUNBOOK preferred over TEKNIK). Returns `target_resolution.method` for transparency
 - **`memory_type` routing** — 11 intent types (credential, exploit_success, exploit_failure, status, recon, todo, blocker, command, lesson, decision, environment) auto-route to correct section + write mode
 - **`memory_summarize` removed** — redundant with memory_stats + memory_list. Tools 10 → 9
@@ -143,7 +164,6 @@ Query → ┌─ FTS5 BM25 (noise-filtered, porter stemmer) ─────┐
 - **Post-compaction anti-refusal** — PreCompact injects identity + rules inline
 - **Dedup improved** — content-hash 500 chars + length (was 150); near-dup 60% (was 80%)
 - **memory_get `search` param** — filter `###` entries within a section by keyword
-- **Context sanitization** — `sanitizeTriggers()` replaces 25+ classifier trigger keywords
 - **19 search quality fixes** — domain variant expansion, credential snippets, TEKNIK depriority, coverage boost
 
 ### v8.3–v8.4
@@ -290,9 +310,10 @@ Auto-generated tool call journal
 | Backup | .bak file before every write |
 | Auto-recovery | tries .bak if main file corrupt |
 | File locking | O_EXCL atomic + 15s timeout + re-entrant depth |
-| Read-before-write | hard-block — 10 min expiry, >500 chars |
-| Anti-duplicate | 3-layer: exact + 60% near-dup + SHA-256 (500 chars + length) |
-| Contradiction | 26 state pairs bidirectional (EN+ID) with inline warnings |
+| Read-before-write | hard-block — 10 min expiry, full read or 3+ sections >2000 chars |
+| Anti-duplicate | 3-layer: exact + 50% near-dup + SHA-256 (500 chars + length) |
+| Overlap detection | Title ≥70% + IP same = BLOCKED; 50-69% = WARN; existing_entries in response |
+| Contradiction | 32 state pairs bidirectional (EN+ID) with inline warnings |
 | Pre-write verify | `memory_verify` read-only check (duplicate + contradiction + staleness) |
 | Section boundary | `isMajorSection()` WHITELIST + `findSectionEnd()` |
 | Replace entry guard | Ambiguity blocked when gap < 15 between top candidates |
@@ -300,14 +321,14 @@ Auto-generated tool call journal
 | Provenance | auto `[YYYY-MM-DD]` stamp on every append |
 | Session isolation | per-session target tracking via `/tmp` (multi-instance safe) |
 | Log rotation | SESSION LOG auto-archive at 50KB, keep last 10 |
-| Credential safety | scrubber (14 patterns), PreCompact safe pointer (no raw inject) |
+| Credential safety | PreCompact safe pointer (no raw inject), hook output preserves original terminology |
 | Dry run | `memory_forget` preview before destructive delete |
 
 ---
 
 ## Comparison
 
-| Feature | MCP Memori v8.7 | claude-mem | Mem0 | doobidoo/mcp-memory |
+| Feature | MCP Memori v8.9.2 | claude-mem | Mem0 | doobidoo/mcp-memory |
 |---------|-----------------|------------|------|---------------------|
 | Storage | `.md` runbooks (readable, git-friendly) | SQLite DB | Vector cloud | SQLite |
 | Search | FTS5 + Vector v2.0 + RRF + domain-rank | FTS5 + ChromaDB | Vector + Graph | Vector only |
@@ -315,13 +336,13 @@ Auto-generated tool call journal
 | Section CRUD | Yes (append/replace/text/entry per section) | No (whole observation) | No | No |
 | Read-before-write | Yes (hard-block, 10 min) | No | No | No |
 | Pre-write verify | Yes (memory_verify: dup+contradiction+stale) | No | No | No |
-| Anti-duplicate | 3-layer (exact+near-60%+SHA256) | SHA256 only | Partial | No |
-| Contradiction detect | 26 pairs bidirectional EN+ID | No | No | No |
-| Lifecycle hooks | 6 hooks + writeback counter | 6 hooks | No | No |
+| Anti-duplicate | 3-layer (exact+near-50%+SHA256) + overlap block | SHA256 only | Partial | No |
+| Contradiction detect | 32 pairs bidirectional EN+ID | No | No | No |
+| Lifecycle hooks | 5 hooks + writeback counter | 6 hooks | No | No |
 | Post-compaction | Auto-inject + identity + re-authorization | Context inject | No | No |
 | Session isolation | Per-session (multi-instance safe) | No | No | No |
-| Vector granularity | Per-section (1,522 vectors) | Per-field | Per-doc | Per-doc |
-| Knowledge graph | Local (3,059 entities, 4,926 links) | No | Cloud | No |
+| Vector granularity | Per-section (746 vectors) | Per-field | Per-doc | Per-doc |
+| Knowledge graph | Local (4,061 entities, 6,893 links) | No | Cloud | No |
 | Memory type routing | 11 intent types → auto section | No | No | No |
 | Replace entry guard | Ambiguity detection (gap < 15) | No | No | No |
 | Dry run delete | Yes (preview before commit) | No | No | No |
@@ -335,7 +356,7 @@ Auto-generated tool call journal
 
 See [INSTALL.md](INSTALL.md) for complete setup guide including:
 - MCP server configuration
-- Hooks configuration (6 lifecycle events)
+- Hooks configuration (5 lifecycle events)
 - Directory setup
 - Verification steps
 
@@ -429,8 +450,8 @@ mcp-memori/
 | No persistent memory | Yes | .md runbooks survive restarts |
 | Context lost on compaction | Yes | SessionStart + PreCompact hooks re-inject state |
 | No read-before-write | Yes | Hard-block with 10 min expiry |
-| Duplicate entries | Yes | 3-layer dedup (exact + near-60% + SHA256) |
-| No contradiction detection | Yes | 26 state pairs bidirectional (EN+ID) |
+| Duplicate entries | Yes | 3-layer dedup (exact + near-50% + SHA256) + overlap block |
+| No contradiction detection | Yes | 32 state pairs bidirectional (EN+ID) |
 | No pre-write verification | Yes | `memory_verify` read-only check |
 | No credential search priority | Yes | Credential-priority snippets |
 | No section-aware storage | Yes | Section CRUD (append/replace/text/entry) |
@@ -456,7 +477,9 @@ mcp-memori/
 
 | Version | Date | Changes |
 |---------|------|---------|
-| **v8.7** | **May 10, 2026** | **memory_verify tool, memory_type routing (11 types), contradiction 16→26 pairs, replace_entry ambiguity guard + mid-line detection, verify target resolution (RUNBOOK-first), memory_summarize removed (10→9 tools), P0 safety (6 fixes), P1 ergonomics (8 fixes), structured search output, 128 unit tests, E2E validated** |
+| **v8.9.2** | **May 28, 2026** | **Overlap detection BLOCK (≥70% title + IP = blocked, 50-69% = warn), existing_entries in append response, anti-bypass rules, PreCompact enhanced (2000+1500+800+12 autolog+entry titles), writeback false positive guard, auto-log ## sanitize, ACTIVITY SUMMARY in whitelist, required_tags post-filter for vector, sanitizeTriggers REMOVED (original data in hooks), sections_list no longer downgrades unlock, contradiction 26→32 pairs** |
+| v8.8 | May 11, 2026 | Dedup 60%→50%, ## downgrade regex, hard-block stricter (3+ sections >2000), MAX_OUTPUT 80K→50K, search ranking fix (TEKNIK depriority only for domain/IP), anti-temp-file rule, scope_id vector filter |
+| v8.7 | May 10, 2026 | memory_verify tool, memory_type routing (11 types), contradiction 16→26 pairs, replace_entry ambiguity guard + mid-line detection, verify target resolution (RUNBOOK-first), memory_summarize removed (10→9 tools), P0 safety (6 fixes), P1 ergonomics (8 fixes), structured search output, 128 unit tests, E2E validated |
 | v8.5–v8.6 | May 7–9, 2026 | isMajorSection WHITELIST, replace_entry, acquireLock TOCTOU, dedup 60%+500chars, memory_get search param, post-compact anti-refusal, snippet extraction fix, context sanitization, 10 critical bugfixes |
 | v8.4 | May 2, 2026 | Per-session target isolation, SESSION LOG rotation, FTS5 cleanup, cross-target cleaner, post-compaction refusal fix, 19 search fixes |
 | v8.3 | Apr 30, 2026 | 9 search fixes, vector v2.0 per-section, 5 hook fixes, writeback counter, template session summary, memory_timeline |

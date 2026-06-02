@@ -1,46 +1,46 @@
 {
     "name": "mcp-memori",
-    "version": "8.0.0",
-    "description": "MCP Memory Server v8.0 — File-based .md Runbooks + Hook Auto-Capture + Intelligence Layer + Timeline + Readable Search + Session Summary (v7.6 base + memory_timeline, table-format search, template-based session summaries)",
+    "version": "8.9.2",
+    "description": "MCP Memory Server v8.9.2 — File-based .md Runbooks + Hybrid Search (FTS5+Vector+RRF) + 5 Lifecycle Hooks + Overlap Detection + 3-Layer Dedup + Hard-block + Contradiction Detection + Per-session Isolation",
     "transport": {
         "type": "stdio"
     },
     "tools": [
         {
             "name": "memory_search",
-            "description": "Cari runbook dengan intelligent search (query expansion + reranking + target-tag boost + credential priority)"
+            "description": "Cari runbook — hybrid search (FTS5 BM25 + Vector + RRF merge + domain reranking + credential-priority snippets). Returns structured results with id, title, score, snippet, next_call."
         },
         {
             "name": "memory_get",
-            "description": "Baca isi runbook. Support pagination (offset/limit) dan section filter untuk runbook besar. Tanpa parameter = auto-paginate jika terlalu besar."
+            "description": "Baca isi runbook. Support pagination (offset/limit), section filter, search param untuk entry lookup, sections_list navigasi, line/line_count. Unlocks hard-block."
         },
         {
             "name": "memory_upsert",
-            "description": "Simpan atau update runbook (.md file). Append-only: content lama TIDAK dihapus. WAJIB memory_get dulu jika runbook sudah ada."
+            "description": "Simpan atau update runbook (.md file). Section-aware append, hard-block enforce, 3-layer dedup, overlap detection, fuzzy replace_entry, memory_type auto-routing (11 types), contradiction detect."
         },
         {
             "name": "memory_forget",
-            "description": "Hapus teks/section/file dari runbook. WAJIB memory_get(id) dulu sebelum forget — agar tidak menghapus yang valid."
+            "description": "Hapus teks/section/file dari runbook. WAJIB memory_get(id) dulu sebelum forget. Support dry_run preview, occurrence guard, remove_all."
         },
         {
-            "name": "memory_summarize",
-            "description": "Ringkasan project: daftar runbook dan statistik"
+            "name": "memory_verify",
+            "description": "Read-only pre-write check: duplicate, near-duplicate, contradiction, staleness detection. Deterministic RUNBOOK-first target resolution. Tidak menulis file."
         },
         {
             "name": "memory_stats",
-            "description": "Statistik storage: total runbook, ukuran, deleted count"
+            "description": "Statistik runbook files: total, size, tags breakdown, verified/success/fail counts."
         },
         {
             "name": "memory_list",
-            "description": "Browse semua runbook dengan filter tags, title, pagination"
+            "description": "Browse semua runbook files. Supports pagination, tag/title filtering."
         },
         {
             "name": "memory_autolog",
-            "description": "Internal tool — hook-driven auto-capture ke section ## _AUTO_LOG. Bypass hard-block HANYA untuk section _AUTO_LOG (append-only log, bukan state). Section state (CREDENTIAL/EXPLOIT/LIVE STATUS) tetap via memory_upsert dengan hard-block. AI manual pakai memory_upsert, bukan ini."
+            "description": "Internal tool: auto-append hook-captured events to ## _AUTO_LOG section. Bypasses hard-block (append-only log). ## headers sanitized before write. NOT for manual use — use memory_upsert instead."
         },
         {
             "name": "memory_timeline",
-            "description": "Lihat konteks kronologis di sekitar suatu event. Tampilkan N entries sebelum/sesudah anchor (observation ID atau runbook _AUTO_LOG). Berguna untuk memahami apa yang terjadi sebelum/sesudah suatu aksi."
+            "description": "Lihat konteks kronologis di sekitar suatu event. Tampilkan N entries sebelum/sesudah anchor (observation ID atau timestamp). Berguna untuk memahami apa yang terjadi sebelum/sesudah suatu aksi."
         }
     ]
 }

@@ -44,6 +44,7 @@ export function confirmRead(id, mode = 'full', charsRead = 0) {
     const newChars = (existing ? existing.charsRead : 0) + charsRead;
     const newSections = existing ? (existing.sectionsRead || 0) : 0;
     const bestMode = mode === 'full' ? 'full'
+        : (mode === 'sections_list' && existing) ? existing.mode
         : (existing?.mode === 'overview' && mode === 'section') ? 'overview'
         : (existing?.mode === 'partial' && mode === 'section') ? 'partial'
         : mode;
@@ -180,7 +181,7 @@ export async function execute(params) {
             if (removeSection) {
                 const sectionHeader = removeSection.startsWith('##') ? removeSection : `## ${removeSection}`;
                 const escapedHeader = sectionHeader.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                const headerRegex = new RegExp(`^${escapedHeader}(?:\\s*$|\\s+&)`, 'im');
+                const headerRegex = new RegExp(`^${escapedHeader}(?:\\s*$|\\s+[/&(])`, 'im');
                 const headerMatch = headerRegex.exec(newBody);
                 if (!headerMatch) {
                     return { ok: false, message: `Section "${removeSection}" tidak ditemukan.`, meta: { trace_id: traceId } };

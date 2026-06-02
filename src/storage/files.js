@@ -224,7 +224,8 @@ function filterNoiseTags(tags) {
 const MAJOR_SECTION_PREFIXES = [
     'RECON', 'CREDENTIAL', 'EXPLOIT', 'GAGAL', 'LIVE STATUS',
     'RE-ENTRY', 'RE-ENTRY CHECKLIST', 'SESSION LOG', '_AUTO_LOG', '_CHANGELOG', 'INFO',
-    'ACTIVITY SUMMARY',
+    'ACTIVITY SUMMARY', 'PERSISTENCE', 'OBJECTIVE', 'NETWORK MAP', 'PIVOT', 'LOOT',
+    'PAYMENT FLOW',
 ];
 
 /**
@@ -300,13 +301,13 @@ export function findSectionEnd(body, sectionStartOffset) {
 export function appendToSection(body, sectionName, newContent) {
     const sectionHeader = sectionName.startsWith('## ') ? sectionName : `## ${sectionName}`;
     const escapedHeader = sectionHeader.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    // Exact section match — anchor with word boundary or end-of-line to prevent
-    // "## CREDENTIAL" matching "## CREDENTIALS:" or "## CREDENTIAL_OLD"
-    const headerRegex = new RegExp(`^${escapedHeader}(?:\\s*$|\\s+&)`, 'im');
+    // Match exact section OR section with variant suffix (/ DISCOVERY, & NOTES, etc)
+    // This aligns with isMajorSection which recognizes "RECON / DISCOVERY" as RECON variant
+    const headerRegex = new RegExp(`^${escapedHeader}(?:\\s*$|\\s+[/&(])`, 'im');
 
     // Downgrade ## to ### in appended content — ONLY keep standard section names as ##
     // Everything else (## TARGET:, ## DATE:, ## METHOD:, ## CREDENTIALS:, etc) → ###
-    newContent = newContent.replace(/^(##) (?!(?:RECON|CREDENTIAL|EXPLOIT|GAGAL|LIVE STATUS|RE-?ENTRY CHECKLIST|SESSION LOG|_AUTO_LOG|_CHANGELOG|INFO|PERSISTENCE)\s*$)/gim, '### ');
+    newContent = newContent.replace(/^(##) (?!(?:RECON|CREDENTIAL|EXPLOIT|GAGAL|LIVE STATUS|RE-?ENTRY CHECKLIST|SESSION LOG|_AUTO_LOG|_CHANGELOG|INFO|PERSISTENCE|OBJECTIVE|NETWORK MAP|PIVOT|LOOT|ACTIVITY SUMMARY|PAYMENT FLOW)\s*$)/gim, '### ');
 
     let overlapWarning = null;
 
@@ -347,6 +348,13 @@ export function appendToSection(body, sectionName, newContent) {
     }
 
     if (!match) {
+        // Check if section name is in standard whitelist
+        const cleanName = sectionName.replace(/^## /, '').trim().toUpperCase();
+        const isStandard = MAJOR_SECTION_PREFIXES.some(p => cleanName === p || cleanName.startsWith(p + ' /') || cleanName.startsWith(p + ' &'));
+        const nonStandardWarning = !isStandard
+            ? `NON_STANDARD_SECTION: "${sectionName}" bukan section standard. Gunakan salah satu: INFO, OBJECTIVE, RECON, NETWORK MAP, CREDENTIAL, EXPLOIT, PIVOT, PERSISTENCE, LOOT, GAGAL, LIVE STATUS, RE-ENTRY CHECKLIST`
+            : null;
+
         let createContent = newContent.trim();
         const hasDate = /^\d{4}-\d{2}-\d{2}|^### \d{4}|^- \d{4}|^\[\d{4}/.test(createContent);
         if (!hasDate && createContent.length > 20) {
@@ -355,7 +363,8 @@ export function appendToSection(body, sectionName, newContent) {
         }
         return {
             body: body.trimEnd() + `\n\n${sectionHeader}\n${createContent}\n`,
-            action: 'section_created'
+            action: 'section_created',
+            nonStandardWarning
         };
     }
 
@@ -390,7 +399,9 @@ export function appendToSection(body, sectionName, newContent) {
             if (hasDifferentIP) {
                 overlapWarning = `⚠️ NEAR-DUPLICATE WARNING: ${Math.round(matchRatio * 100)}% lines match tapi IP beda (${unmatchedIPs[0]}) — kemungkinan teknik sama di target beda. Data TETAP ditulis.`;
             } else {
-                return { body, action: 'skipped_near_duplicate', match_ratio: Math.round(matchRatio * 100) };
+                const matchedContent = matchedLines.slice(0, 3).join('\n');
+                const nearMatchTitle = (existingSection.match(new RegExp(`^(?:\\[\\d{4}[^\\]]*\\]\\s*)?###\\s+[^\\n]*(?=[\\s\\S]*?${matchedLines[0]?.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').substring(0, 40)})`, 'm')) || [''])[0].replace(/^\[\d{4}[^\]]*\]\s*/, '').trim();
+                return { body, action: 'skipped_near_duplicate', match_ratio: Math.round(matchRatio * 100), near_match_preview: matchedContent.substring(0, 300), near_match_title: nearMatchTitle || null };
             }
         }
     }
@@ -486,14 +497,16 @@ export function appendToSection(body, sectionName, newContent) {
     if (!overlapBlocked) {
         const newTitleMatch = stampedContent.match(/^(?:\[\d{4}[^\]]*\]\s*)?###\s+(.+)/m);
         if (newTitleMatch) {
-            const newWords = newTitleMatch[1].toLowerCase().replace(/[^a-z0-9\s]/g, '').trim().split(/\s+/).filter(w => w.length >= 3);
+            const stripIPFromTitle = t => t.replace(/\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/g, '').replace(/[()]/g, '');
+            const newWords = stripIPFromTitle(newTitleMatch[1]).toLowerCase().replace(/[^a-z0-9\s]/g, '').trim().split(/\s+/).filter(w => w.length >= 3);
             if (newWords.length >= 1) {
                 const existingTitles = (existingSection.match(/^(?:\[\d{4}[^\]]*\]\s*)?###\s+.+$/gm) || []).map(t => t.replace(/^\[\d{4}[^\]]*\]\s*/, ''));
                 const minOverlap = newWords.length === 1 ? 1 : 2;
                 for (const entry of existingTitles) {
-                    const entryWords = entry.replace(/^###\s+/, '').toLowerCase().replace(/[^a-z0-9\s]/g, '').trim().split(/\s+/).filter(w => w.length >= 3);
+                    const entryWords = stripIPFromTitle(entry.replace(/^###\s+/, '')).toLowerCase().replace(/[^a-z0-9\s]/g, '').trim().split(/\s+/).filter(w => w.length >= 3);
                     const overlap = newWords.filter(w => entryWords.includes(w)).length;
-                    if (overlap >= minOverlap && overlap / Math.max(newWords.length, 1) >= 0.5) {
+                    const overlapRatio = overlap / Math.max(newWords.length, 1);
+                    if (overlap >= minOverlap && overlapRatio >= 0.5) {
                         const entryBlocks2 = existingSection.split(/(?=^(?:\[\d{4}[^\]]*\]\s*)?###\s)/m).filter(b => /^(?:\[\d{4}[^\]]*\]\s*)?###\s/.test(b));
                         const matchedBlock = entryBlocks2.find(b => b.startsWith(entry));
                         overlappingEntry = matchedBlock ? matchedBlock.substring(0, 500) : entry;
@@ -502,15 +515,36 @@ export function appendToSection(body, sectionName, newContent) {
                         const hasDiffIP = newIPs.length > 0 && existingIPs.length > 0 && !hasIPOverlap;
                         if (hasDiffIP) {
                             overlapWarning = `⚠️ OVERLAP WARNING: Title "${newTitleMatch[1].substring(0, 60)}" mirip "${entry.substring(0, 60)}" tapi IP BEDA (new: ${newIPs[0]}, existing: ${existingIPs[0]}). Kemungkinan teknik sama di target beda — data TETAP ditulis.`;
-                        } else {
-                            overlapWarning = `🛑 OVERLAP BLOCKED: Entry title "${newTitleMatch[1].substring(0, 60)}" ≥50% word match existing "${entry.substring(0, 60)}". FIX: replace_entry:"${entry.substring(0, 60)}" untuk UPDATE. Entry LAIN yang genuinely baru TETAP bisa di-append.`;
+                        } else if (overlapRatio >= 0.7) {
+                            overlapWarning = `🛑 OVERLAP BLOCKED: Entry title "${newTitleMatch[1].substring(0, 60)}" ≥70% word match existing "${entry.substring(0, 60)}". FIX: replace_entry:"${entry.substring(0, 60)}" untuk UPDATE. Entry LAIN yang genuinely baru TETAP bisa di-append.`;
                             overlapBlocked = true;
+                        } else {
+                            overlapWarning = `⚠️ OVERLAP WARNING: Title "${newTitleMatch[1].substring(0, 60)}" mirip "${entry.substring(0, 60)}" (${Math.round(overlapRatio * 100)}% match). IP sama — cek apakah UPDATE (replace_entry) atau data genuinely baru (service/data type beda).`;
                         }
                         break;
-                    } else if (overlap >= minOverlap && overlap / Math.max(newWords.length, 1) >= 0.3 && !overlapWarning) {
+                    } else if (overlap >= minOverlap && overlapRatio >= 0.3 && !overlapWarning) {
                         overlapWarning = `⚠️ OVERLAP WARNING: Entry "${newTitleMatch[1].substring(0, 60)}" mirip "${entry.substring(0, 60)}". Cek apakah UPDATE atau data baru.`;
                     }
                 }
+            }
+        }
+    }
+
+    // v8.9.2: Content-similarity SECONDARY check — catches "same data, different title"
+    // If title overlap missed (title very different) but BODY content 40%+ lines match existing entry → WARN
+    if (!overlapBlocked && !overlapWarning && newLines.length >= 3) {
+        const entryBlocks = existingSection.split(/(?=^(?:\[\d{4}[^\]]*\]\s*)?###\s)/m).filter(b => /^(?:\[\d{4}[^\]]*\]\s*)?###\s/.test(b));
+        for (const block of entryBlocks) {
+            const blockLower = block.toLowerCase();
+            const bodyLines = newLines.filter(l => !l.startsWith('###'));
+            if (bodyLines.length < 2) break;
+            const bodyMatched = bodyLines.filter(l => blockLower.includes(l.toLowerCase()));
+            const bodyRatio = bodyMatched.length / bodyLines.length;
+            if (bodyRatio >= 0.4) {
+                const entryTitle = (block.match(/^(?:\[\d{4}[^\]]*\]\s*)?###\s+(.+)/m) || ['', 'unknown'])[1];
+                overlapWarning = `⚠️ CONTENT OVERLAP WARNING: ${Math.round(bodyRatio * 100)}% baris content match existing "### ${entryTitle.substring(0, 60)}" meski title beda. Kemungkinan data SAMA format beda — gunakan replace_entry:"### ${entryTitle.substring(0, 60)}" untuk UPDATE.`;
+                overlappingEntry = block.substring(0, 400);
+                break;
             }
         }
     }
@@ -1347,21 +1381,64 @@ export function searchRunbooks(queryStr, options = {}) {
         if (meta.verified === true) score *= 1.05;
 
         if (score > 0.5 || queryWords.length === 0) {  // Raised threshold from 0 to 0.5 — filter irrelevant noise
-            // Context-aware snippet: show RELEVANT section, not just file beginning
-            const snippet = fullContent ? body : extractContextSnippet(body, queryWords);
-
-            results.push({
-                id: file,
-                type: 'runbook',
-                title: meta.title || filenameToTitle(file),
-                snippet,
-                content_length: body.length,
-                tags: Array.isArray(meta.tags) ? meta.tags : (typeof meta.tags === 'string' ? [meta.tags] : []),
-                score: Math.round(score * 100) / 100,
-                created_at: meta.created,
-                updated_at: meta.updated,
-                version: meta.version || 1
-            });
+            // v8.9.2: scope_id multi-snippet — return multiple results per matching section
+            if (scopeId) {
+                const skipSections = new Set(['_auto_log', '_changelog', 'session log']);
+                const sectionSplitRegex = /(?=^## )/m;
+                const sectionChunks = body.split(sectionSplitRegex).filter(s => s.startsWith('## '));
+                for (const chunk of sectionChunks) {
+                    const headerMatch = chunk.match(/^## ([^\n]+)/);
+                    if (!headerMatch) continue;
+                    const sectionName = headerMatch[1].trim();
+                    if (skipSections.has(sectionName.toLowerCase())) continue;
+                    const chunkLower = chunk.toLowerCase();
+                    let sectionScore = 0;
+                    for (const word of originalWords) {
+                        const occ = countOccurrences(chunkLower, word);
+                        if (occ > 0) sectionScore += Math.min(5, 1 + Math.log2(occ));
+                    }
+                    if (sectionScore <= 0) continue;
+                    const entryMatches = chunk.match(/^(?:\[\d{4}[^\]]*\]\s*)?###\s+.+$/gm) || [];
+                    const matchingEntries = entryMatches.filter(e => {
+                        const eLower = e.toLowerCase();
+                        return originalWords.some(w => eLower.includes(w));
+                    }).map(e => e.replace(/^(?:\[\d{4}[^\]]*\]\s*)?###\s+/, '').substring(0, 80));
+                    const snipBody = chunk.replace(/^## [^\n]+\n/, '').trim();
+                    let snippetText = snipBody.substring(0, 400);
+                    if (matchingEntries.length > 0) {
+                        snippetText = `[${sectionName}] Entries: ${matchingEntries.join(' | ')}`;
+                    } else {
+                        snippetText = `[${sectionName}] ${snippetText}`;
+                    }
+                    results.push({
+                        id: file,
+                        type: 'runbook',
+                        title: meta.title || filenameToTitle(file),
+                        snippet: snippetText.substring(0, 500),
+                        content_length: body.length,
+                        tags: Array.isArray(meta.tags) ? meta.tags : (typeof meta.tags === 'string' ? [meta.tags] : []),
+                        score: Math.round((score * 0.5 + sectionScore * 2) * 100) / 100,
+                        created_at: meta.created,
+                        updated_at: meta.updated,
+                        version: meta.version || 1,
+                        matched_section: sectionName
+                    });
+                }
+            } else {
+                const snippet = fullContent ? body : extractContextSnippet(body, queryWords);
+                results.push({
+                    id: file,
+                    type: 'runbook',
+                    title: meta.title || filenameToTitle(file),
+                    snippet,
+                    content_length: body.length,
+                    tags: Array.isArray(meta.tags) ? meta.tags : (typeof meta.tags === 'string' ? [meta.tags] : []),
+                    score: Math.round(score * 100) / 100,
+                    created_at: meta.created,
+                    updated_at: meta.updated,
+                    version: meta.version || 1
+                });
+            }
         }
     }
 

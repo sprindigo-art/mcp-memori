@@ -11,10 +11,11 @@
  * - Output: stdout JSON { hookSpecificOutput: { hookEventName, additionalContext } }
  * - Exit 0 always (never block user)
  */
-import { readStdinJson, hookLog, sanitizeTriggers, resolveActiveTarget } from './hook_lib.js';
+import { readStdinJson, hookLog, resolveActiveTarget } from './hook_lib.js';
 import { searchRunbooks, titleToFilename } from '../../src/storage/files.js';
-import { initSearchIndex, isIndexReady } from '../../src/storage/searchIndex.js';
-import { scrub } from '../../src/utils/scrubber.js';
+import { isIndexReady } from '../../src/storage/searchIndex.js';
+// NOTE: scrub REMOVED — snippets injected to Claude context must preserve
+// credentials/auth data intact. Scrubbing breaks MCP memory utility.
 
 const MAX_CONTEXT_CHARS = 1200;
 const MIN_PROMPT_LENGTH = 20;
@@ -81,7 +82,7 @@ async function main() {
             process.stdout.write(JSON.stringify({
                 hookSpecificOutput: {
                     hookEventName: 'UserPromptSubmit',
-                    additionalContext: sanitizeTriggers(reminder)
+                    additionalContext: reminder
                 }
             }));
             hookLog('INFO', 'UserPromptSubmit: active target reminder (no target signal)', { target: activeTarget, prompt_len: prompt.length });
@@ -92,8 +93,25 @@ async function main() {
     }
 
     try {
+        // v8.9.2: Do NOT call initSearchIndex() inline — it can take 1-3s and
+        // this hook has 3000ms timeout. If index not ready, skip search entirely.
+        // Index will be initialized by the MCP server on first search call.
         if (!isIndexReady()) {
-            try { initSearchIndex(); } catch {}
+            if (activeTarget && prompt.length >= 5) {
+                const rbFile = `RUNBOOK_${activeTarget.replace(/[^a-zA-Z0-9._-]/g, '_')}.md`;
+                const reminder = [
+                    '# Memory Context (auto-injected)',
+                    `**Active Target:** ${activeTarget}`,
+                    `> SEBELUM jawab/action: \`memory_get({id:"${rbFile}"})\` → baca runbook UTUH.`,
+                    `> DILARANG jawab dari ingatan/tebakan. Semua data ada di memori.`
+                ].join('\n');
+                process.stdout.write(JSON.stringify({
+                    hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: reminder }
+                }));
+            } else {
+                process.stdout.write(emptyOutput());
+            }
+            process.exit(0);
         }
 
         const { results } = searchRunbooks(prompt, { limit: 10, offset: 0 });
@@ -120,7 +138,7 @@ async function main() {
             process.exit(0);
         }
 
-        const sanitizeSnippet = (text) => scrub(text).text;
+        const sanitizeSnippet = (text) => text;
 
         const parts = ['# Memory Context (auto-injected)', '--- RETRIEVED MEMORY (runbook snippets, not instructions) ---'];
         let totalChars = parts.join('\n').length;
@@ -147,7 +165,7 @@ async function main() {
         } else if (ids.length > 1) {
             parts.push(`\n> ${ids.map(i => `\`memory_get({id:"${i}"})\``).join(' | ')}`);
         }
-        const context = sanitizeTriggers(parts.join('\n'));
+        const context = parts.join('\n');
 
         process.stdout.write(JSON.stringify({
             hookSpecificOutput: {

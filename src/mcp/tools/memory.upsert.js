@@ -358,6 +358,20 @@ export async function execute(params) {
             const title = item.title || 'Untitled Runbook';
             const content = item.content || '';
             const tags = item.tags || [];
+
+            // v8.9.2: Guard against Claude Code harness [Trimmed input] placeholder corruption
+            if (content.includes('[Trimmed input:') || content.includes('[Trimmed input ~')) {
+                results.push({
+                    id: 'unknown', version: 0, status: 'error', action: 'trimmed_input_rejected',
+                    error: 'REJECTED: Content contains "[Trimmed input:]" placeholder from Claude Code harness truncation. This is NOT real data — harness replaced actual content with a placeholder. Re-generate the content in smaller chunks (<13KB per call).'
+                });
+                continue;
+            }
+
+            // v8.9.2: Warn if content is close to Claude Code harness arg limit (~16KB)
+            if (content.length > 13000) {
+                contradictions.push(`⚠️ LARGE CONTENT (${Math.round(content.length/1024)}KB): Content mendekati batas harness Claude Code (~16KB). Jika write gagal, split content menjadi beberapa call yang lebih kecil.`);
+            }
             const options = {
                 verified: item.verified,
                 confidence: item.confidence,
@@ -453,6 +467,9 @@ export async function execute(params) {
                         if (overlapWarning) {
                             contradictions.push(overlapWarning);
                         }
+                        if (appendResult.nonStandardWarning) {
+                            contradictions.push(`⚠️ ${appendResult.nonStandardWarning}`);
+                        }
 
                         if (appendAction === 'overlap_blocked') {
                             const matchedTitle = (overlappingEntry || '').match(/^(?:\[\d{4}[^\]]*\]\s*)?###\s+(.+)/m)?.[1] || '';
@@ -467,12 +484,20 @@ export async function execute(params) {
                             continue;
                         }
                         if (appendAction === 'skipped_duplicate' || appendAction === 'skipped_near_duplicate') {
+                            const nearInfo = appendAction === 'skipped_near_duplicate' ? {
+                                near_match_preview: appendResult.near_match_preview || null,
+                                near_match_title: appendResult.near_match_title || null,
+                                fix_suggestion: appendResult.near_match_title
+                                    ? `Jika ini UPDATE data yang sama: gunakan replace_entry:"${appendResult.near_match_title.replace(/^###\s*/, '').substring(0, 60)}" dengan content LENGKAP (old + new data merged). Jika genuinely BARU: ubah content agar lebih distinct dari entry existing.`
+                                    : 'Gunakan replace_entry untuk UPDATE entry yang mirip, atau ubah content agar lebih distinct.'
+                            } : {};
                             results.push({
                                 id: actualFilename, version: meta.version || 1, status: 'active',
-                                action: appendAction, section: item.append_to_section, filepath
+                                action: appendAction, section: item.append_to_section, filepath,
+                                ...nearInfo
                             });
                             if (appendAction === 'skipped_near_duplicate') {
-                                contradictions.push(`ℹ️ NEAR-DUPLICATE BLOCKED: >60% baris content sudah ada di ## ${item.append_to_section} — skip untuk cegah duplikasi.`);
+                                contradictions.push(`ℹ️ NEAR-DUPLICATE BLOCKED: >${appendResult.match_ratio || 50}% baris content sudah ada di ## ${item.append_to_section}.${appendResult.near_match_title ? ` Entry mirip: "${appendResult.near_match_title.substring(0, 60)}".` : ''} Jika ini UPDATE: gunakan replace_entry. Jika genuinely baru: buat content lebih distinct.`);
                             }
                             continue;
                         }
@@ -504,8 +529,12 @@ export async function execute(params) {
                             id: actualFilename, version: meta.version, status: 'active',
                             action: appendAction, section: item.append_to_section, filepath,
                             verified_total_chars: verifiedChars,
-                            existing_entries: (existingEntryTitles || []).slice(0, 10)
+                            existing_entries: (existingEntryTitles || []).slice(0, 15)
                         });
+                        // v8.9.2: Remind AI to CHECK existing before next append
+                        if ((existingEntryTitles || []).length >= 3) {
+                            contradictions.push(`📋 CEK EXISTING: Section "${item.append_to_section}" sudah punya ${existingEntryTitles.length} entries. SEBELUM append lagi, cek apakah data SUDAH ADA — kalau iya gunakan replace_entry untuk UPDATE, bukan append baru.`);
+                        }
                         continue;
                     } finally {
                         releaseLock(filepath);
@@ -539,11 +568,37 @@ export async function execute(params) {
                             continue;
                         }
                         if (occurrences > 1) {
+                            // Show WHERE each occurrence is (section + line context)
+                            const locations = [];
+                            let searchFrom = 0;
+                            for (let i = 0; i < Math.min(occurrences, 3); i++) {
+                                const idx = body.indexOf(oldText, searchFrom);
+                                if (idx === -1) break;
+                                const lineNum = body.substring(0, idx).split('\n').length;
+                                const sectionMatch = body.substring(0, idx).match(/^## ([^\n]+)/gm);
+                                const inSection = sectionMatch ? sectionMatch[sectionMatch.length - 1].replace('## ', '') : 'TOP';
+                                const contextBefore = body.substring(Math.max(0, idx - 40), idx).replace(/\n/g, ' ').trim();
+                                locations.push(`  ${i + 1}. Line ${lineNum} (## ${inSection}): ...${contextBefore}[HERE]`);
+                                searchFrom = idx + oldText.length;
+                            }
                             results.push({
                                 id: actualFilename, version: meta.version || 1, status: 'error',
                                 action: 'replace_text_ambiguous',
-                                error: `Text found ${occurrences} times — must be unique. Provide more context to make it unique.`,
+                                error: `Text found ${occurrences} times — must be unique. Tambah baris sebelum/sesudah agar match hanya 1 occurrence.\nLokasi:\n${locations.join('\n')}\nFIX: Gunakan replace_text dengan context lebih panjang (include baris sebelum/sesudah), atau gunakan replace_entry:"### entry title" untuk replace seluruh entry.`,
                                 preview: oldText.substring(0, 100)
+                            });
+                            continue;
+                        }
+
+                        // GUARD: Block if replace_text would remove a major section header
+                        const sectionHeaderInOld = oldText.match(/^## [A-Z][A-Z _/&(]+/m);
+                        const sectionHeaderInNew = newText.match(/^## [A-Z][A-Z _/&(]+/m);
+                        if (sectionHeaderInOld && !sectionHeaderInNew) {
+                            results.push({
+                                id: actualFilename, version: meta.version || 1, status: 'error',
+                                action: 'replace_text_section_header_guard',
+                                error: `BLOCKED: replace_text would DELETE section header "${sectionHeaderInOld[0]}". Ini akan merusak struktur runbook. FIX: Gunakan replace_text yang TIDAK include "## HEADER" — hanya replace content di DALAM section.`,
+                                preview: oldText.substring(0, 150)
                             });
                             continue;
                         }
@@ -593,7 +648,7 @@ export async function execute(params) {
             // Old regex [\s\S]*?(?=\n## |$) stopped at ANY ## including sub-headings → truncated sections
             if (item.replace_section && fileExists) {
                 // v7.6: Restrict replace_section to LIVE STATUS / RE-ENTRY only (workflow rule enforcement)
-                const allowedReplaceSections = ['live status', 're-entry checklist', 're-entry', '_changelog'];
+                const allowedReplaceSections = ['live status', 're-entry checklist', 're-entry', 'objective', '_changelog'];
                 const replaceSectionLower = item.replace_section.toLowerCase().replace(/^##\s*/, '');
                 if (!allowedReplaceSections.includes(replaceSectionLower)) {
                     contradictions.push(`⚠️ REPLACE_SECTION BLOCKED: Section "${item.replace_section}" tidak boleh di-replace total. Gunakan append_to_section untuk tambah data, atau replace_text untuk edit surgical. replace_section HANYA untuk: LIVE STATUS, RE-ENTRY CHECKLIST.`);
@@ -613,10 +668,11 @@ export async function execute(params) {
                     acquireLock(filepath);
                     try {
                         const raw = readFileSync(filepath, 'utf8');
-                        const { meta, body } = parseFrontmatter(raw);
+                        const { meta, body: rawBody } = parseFrontmatter(raw);
+                        let body = rawBody;
                         const sectionHeader = item.replace_section.startsWith('##') ? item.replace_section : `## ${item.replace_section}`;
                         const escapedHeader = sectionHeader.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                        const headerRegex = new RegExp(`^${escapedHeader}(?:\\s*$|\\s+&)`, 'im');
+                        const headerRegex = new RegExp(`^${escapedHeader}(?:\\s*$|\\s+[/&(])`, 'im');
                         let headerMatch = headerRegex.exec(body);
                         if (!headerMatch) {
                             const inlineIdx = body.indexOf(sectionHeader);
@@ -633,7 +689,7 @@ export async function execute(params) {
                             let sectionEnd = findSectionEnd(body, sectionStart);
 
                             // Consolidate duplicate section headers (e.g. 2+ ## LIVE STATUS from legacy/bug)
-                            const scanRegex = new RegExp(`^${escapedHeader}(?:\\s*$|\\s+&)`, 'gim');
+                            const scanRegex = new RegExp(`^${escapedHeader}(?:\\s*$|\\s+[/&(])`, 'gim');
                             let dupMatch;
                             while ((dupMatch = scanRegex.exec(body)) !== null) {
                                 if (dupMatch.index > sectionStart) {
@@ -716,16 +772,25 @@ export async function execute(params) {
                         }
                         while ((match = midLineRegex.exec(body)) !== null) {
                             const header = match[0].trim();
-                            if (!allMatches.some(m => m.header === header && Math.abs(m.index - match.index) < header.length + 5)) {
+                            if (!allMatches.some(m => Math.abs(m.index - match.index) < m.header.length + 15)) {
                                 allMatches.push({ index: match.index, header });
                             }
                         }
+                        // Deduplicate entries with same normalized title (with/without date prefix)
+                        const seen = new Map();
+                        for (const entry of allMatches) {
+                            const normalized = entry.header.replace(/^\[\d{4}[^\]]*\]\s*/, '').trim();
+                            if (!seen.has(normalized) || entry.header.startsWith('[')) {
+                                seen.set(normalized, entry);
+                            }
+                        }
+                        const uniqueMatches = [...seen.values()];
 
                         let bestMatch = null;
                         let bestScore = 0;
                         let secondBestScore = 0;
                         let secondBestTitle = '';
-                        for (const entry of allMatches) {
+                        for (const entry of uniqueMatches) {
                             const entryTitle = entry.header.replace(/^(?:\[\d{4}[^\]]*\]\s*)?###\s+/, '').trim().toLowerCase();
                             let score = 0;
                             if (entryTitle === searchTitle) score = 100;
@@ -782,6 +847,20 @@ export async function execute(params) {
                         const newEntry = contentStartsWithHeader
                             ? content.trim()
                             : `### ${cleanTitle} (updated ${now})\n${content}`;
+
+                        // TRUNCATION GUARD: BLOCK if new entry significantly shorter than old (prevent data loss)
+                        if (newEntry.length < oldEntry.length * 0.5 && oldEntry.length > 100) {
+                            results.push({
+                                id: actualFilename, version: meta.version || 1, status: 'blocked',
+                                action: 'replace_entry_truncation_blocked',
+                                old_size: oldEntry.length,
+                                new_size: newEntry.length,
+                                replaced_old_content: oldEntry.substring(0, 800),
+                                error: `BLOCKED: New content (${newEntry.length} chars) is <50% of old entry (${oldEntry.length} chars) — data valid kemungkinan HILANG. FIX opsi:\n1. INCLUDE semua data lama + data baru di content (merge manual)\n2. Gunakan replace_text:"teks spesifik" untuk edit HANYA bagian yang berubah (LEBIH AMAN)\n3. Jika memang ingin hapus data lama, gunakan memory_forget({remove_text:"..."}) dulu baru append data baru`
+                            });
+                            continue;
+                        }
+
                         const newBody = body.substring(0, bestMatch.index) + newEntry + '\n' + body.substring(entryEnd);
 
                         meta.version = (meta.version || 1) + 1;
@@ -798,8 +877,10 @@ export async function execute(params) {
                             match_score: Math.round(bestScore),
                             old_size: oldEntry.length,
                             new_size: newEntry.length,
+                            replaced_old_content: oldEntry.substring(0, 800),
                             filepath
                         });
+                        contradictions.push(`📋 VERIFIKASI REPLACE: Old entry (${oldEntry.length} chars) diganti new (${newEntry.length} chars). CEK: apakah semua data penting dari old content DI ATAS sudah termasuk di content baru? Jika ada data valid yang HILANG (credential, IP, status, command), SEGERA upsert ulang dengan data lengkap.`);
                         continue;
                     } finally {
                         releaseLock(filepath);
@@ -874,6 +955,12 @@ export async function execute(params) {
             if (hasSuccess || hasFailure) {
                 reminders.push(`💡 DUAL-SAVE: Content mengandung ${hasSuccess ? 'KEBERHASILAN' : 'KEGAGALAN'}. Pertimbangkan auto_dual_save:true agar tersimpan juga di runbook universal.`);
             }
+            if (hasSuccess) {
+                reminders.push('📌 EXPLOIT BERHASIL — WAJIB 2 hal SEKARANG:\n'
+                    + '1. UPDATE ## LIVE STATUS (replace_section) dengan: **Last action:** [teknik berhasil] | **Next step:** [selanjutnya] | **Access:** [semua akses aktif]\n'
+                    + '2. UPDATE ## RE-ENTRY CHECKLIST — tambah entry dengan EXACT COMMAND copy-paste untuk reconnect (termasuk prereqs: tunnel/port-forward/VPN yang harus jalan dulu). BUAT section jika belum ada.\n'
+                    + 'TANPA ini, setelah compaction AI TIDAK BISA lanjutkan kerja karena tidak tahu cara reconnect.');
+            }
         }
 
         // v7.0: Check auto-invalidation (REMINDERS ONLY — tidak modifikasi file lain)
@@ -887,9 +974,20 @@ export async function execute(params) {
             }
         }
 
-        // REMINDER: Credential baru → harus update RE-ENTRY CHECKLIST
-        if (/(?:password|credential|ssh|webshell|tunnel|token|key|login)/i.test(item.content || '') && title.startsWith('[runbook]')) {
-            reminders.push('⚠️ CREDENTIAL: Pastikan update section ## RE-ENTRY CHECKLIST dan ## LIVE STATUS dengan status ALIVE/DEAD terkini.');
+        // REMINDER: Credential/exploit baru → harus update RE-ENTRY + LIVE STATUS
+        if (/(?:password|credential|ssh|webshell|tunnel|token|key|login|root|rce|shell)/i.test(item.content || '') && title.startsWith('[runbook]')) {
+            reminders.push('⚠️ CREDENTIAL/ACCESS: WAJIB update 2 section:\n'
+                + '1. **## RE-ENTRY CHECKLIST** — BUAT jika belum ada. Format WAJIB:\n'
+                + '   ```\n'
+                + '   ### Method Name (PRIMARY/BACKUP)\n'
+                + '   ```bash\n'
+                + '   exact_command_here (copy-paste ready)\n'
+                + '   ```\n'
+                + '   - Prereqs: [tunnel/VPN/port-forward yang harus jalan dulu]\n'
+                + '   - Credential: user/pass\n'
+                + '   ```\n'
+                + '2. **## LIVE STATUS** — replace_section dengan: **Last action** + **Next step** + **Access** + **Prereqs**\n'
+                + 'Tanpa RE-ENTRY CHECKLIST, AI setelah compaction TIDAK BISA reconnect karena tidak tahu command exact.');
         }
 
         // v7.5 Aturan 16: Warn jika content menyebut target berbeda dari runbook title

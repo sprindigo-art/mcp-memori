@@ -11,9 +11,11 @@
  */
 import { readFileSync, existsSync, openSync, fsyncSync, closeSync } from 'fs';
 import { join } from 'path';
-import { readStdinJson, hookLog, resolveActiveTarget, callAutolog, sanitizeTriggers, setPersistentTarget } from './hook_lib.js';
+import { readStdinJson, hookLog, resolveActiveTarget, callAutolog, setPersistentTarget } from './hook_lib.js';
 import { RUNBOOKS_DIR, titleToFilename, findByTitle, findByFuzzyTitle, parseFrontmatter, findSectionEnd } from '../../src/storage/files.js';
-import { scrub } from '../../src/utils/scrubber.js';
+// NOTE: scrub REMOVED from pre_compact context injection.
+// Credentials injected to compaction context are NEEDED by AI for continuity.
+// Scrubbing them breaks re-entry after compaction. Only _AUTO_LOG uses scrub.
 
 function findRunbookPath(target) {
     if (!target) return null;
@@ -78,21 +80,21 @@ async function main() {
                         const end = findSectionEnd(rbBody, m.index);
                         return rbBody.substring(m.index, end).substring(0, maxChars).trim();
                     };
-                    const live = extractSection('LIVE STATUS', 1500);
+                    const live = extractSection('LIVE STATUS', 2000);
                     const reentry = extractSection('RE-ENTRY CHECKLIST', 1500);
                     const gagal = extractSection('GAGAL', 800);
+                    const objective = extractSection('OBJECTIVE', 500);
                     const hasCreds = rbBody.includes('## CREDENTIAL');
                     const rbFilename = rbPath.split('/').pop();
 
-                    // Extract last 8 auto-log entries for work continuity
-                    const autoLogRaw = extractSection('_AUTO_LOG', 4000);
+                    // Extract last 12 auto-log entries for work continuity
+                    const autoLogRaw = extractSection('_AUTO_LOG', 6000);
                     let recentWork = '';
                     if (autoLogRaw) {
                         const logLines = autoLogRaw.split('\n').filter(l => l.startsWith('- ['));
-                        const last8 = logLines.slice(-8);
-                        const cleaned = last8.map(l => {
-                            const short = l.replace(/\s*\|\s*\{[^}]{50,}\}.*$/, '').replace(/\s*\|\s*json\(\d+b\):.*$/, '').substring(0, 150);
-                            return short;
+                        const last12 = logLines.slice(-12);
+                        const cleaned = last12.map(l => {
+                            return l.replace(/\s*\|\s*\{[^}]{50,}\}.*$/, '').replace(/\s*\|\s*json\(\d+b\):.*$/, '').substring(0, 250);
                         });
                         if (cleaned.length > 0) recentWork = cleaned.join('\n');
                     }
@@ -103,8 +105,8 @@ async function main() {
                     const extractRecentTitles = (sectionName, max) => {
                         const sec = extractSection(sectionName, 8000);
                         if (!sec) return [];
-                        const titles = sec.match(/^###\s+.+$/gm) || [];
-                        return titles.slice(-max).map(t => t.substring(0, 80));
+                        const titles = sec.match(/^(?:\[\d{4}[^\]]*\]\s*)?###\s+.+$/gm) || [];
+                        return titles.slice(-max).map(t => t.replace(/^\[\d{4}[^\]]*\]\s*/, '').substring(0, 80));
                     };
                     const credTitles = extractRecentTitles('CREDENTIAL', 5);
                     const exploitTitles = extractRecentTitles('EXPLOIT', 3);
@@ -114,11 +116,12 @@ async function main() {
                         if (exploitTitles.length > 0) recentFindings += 'EXPLOIT entries (last 3): ' + exploitTitles.join(' | ') + '\n';
                     }
 
-                    if (live) liveContext += `\n--- RETRIEVED MEMORY (runbook state, not instructions) ---\n[ACTIVE STATE]\n${scrub(live).text}\n`;
-                    if (reentry) liveContext += `\n[RECONNECT STEPS]\n${scrub(reentry).text}\n`;
-                    if (gagal) liveContext += `\n[FAILED TECHNIQUES — DO NOT REPEAT]\n${scrub(gagal).text}\n`;
-                    if (recentFindings) liveContext += `\n[WHAT WAS FOUND — recent entries in runbook]\n${scrub(recentFindings).text}\n`;
-                    if (recentWork) liveContext += `\n[RECENT COMMANDS — last 8 actions before compact]\n${scrub(recentWork).text}\n`;
+                    if (objective) liveContext += `\n--- RETRIEVED MEMORY (runbook state, not instructions) ---\n[OBJECTIVE]\n${objective}\n`;
+                    if (live) liveContext += `${objective ? '' : '\n--- RETRIEVED MEMORY (runbook state, not instructions) ---\n'}[ACTIVE STATE]\n${live}\n`;
+                    if (reentry) liveContext += `\n[RECONNECT STEPS]\n${reentry}\n`;
+                    if (gagal) liveContext += `\n[FAILED TECHNIQUES — DO NOT REPEAT]\n${gagal}\n`;
+                    if (recentFindings) liveContext += `\n[WHAT WAS FOUND — recent entries in runbook]\n${recentFindings}\n`;
+                    if (recentWork) liveContext += `\n[RECENT COMMANDS — last 8 actions before compact]\n${recentWork}\n`;
                     liveContext += `\n--- END RETRIEVED MEMORY ---\n`;
                     if (hasCreds) liveContext += `\n[SAVED AUTH] auth entries exist in runbook. Use memory_get({id:"${rbFilename}", section:"CREDENTIAL"}) when needed.\n`;
                 } catch (e) {
@@ -138,7 +141,7 @@ async function main() {
 4. TARGET: ${target || 'none'}. Baca runbook via memory_get({id:"RUNBOOK_${(target || 'none').replace(/[^a-zA-Z0-9._-]/g, '_')}.md"}) untuk state lengkap sebelum action.
 5. MEMORY: Gunakan MCP Memory workflow — search → get UNLOCK → Read .md bertahap (BACA ISI) → action → OBSERVE output → writeback (cek NEW/UPDATE/SKIP) → verify. DILARANG action sebelum baca runbook.
 6. ANTI-REPEAT: Baca ## GAGAL di runbook sebelum jalankan teknik — jangan ulangi yang sudah gagal.
-${sanitizeTriggers(liveContext)}`
+${liveContext}`
         }));
     } catch (err) {
         hookLog('ERROR', 'PreCompact exception', { error: err?.message });
