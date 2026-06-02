@@ -124,6 +124,7 @@ export const definition = {
             remove_text: { type: 'string', description: 'Teks spesifik yang dihapus (sisanya tetap). Jika muncul >1x, harus set remove_all:true atau gagal.' },
             remove_section: { type: 'string', description: 'Section ## HEADER yang dihapus (sisanya tetap)' },
             remove_all: { type: 'boolean', description: 'Jika true, hapus SEMUA occurrence remove_text. Default false (hanya boleh 1 occurrence).' },
+            keep_one: { type: 'boolean', description: 'Jika true + remove_all:true, hapus semua occurrence KECUALI 1 (simpan yang terakhir). Untuk cleanup duplicate entries.' },
             dry_run: { type: 'boolean', description: 'Jika true, tampilkan preview tanpa menulis/menghapus file. Gunakan untuk melihat efek delete sebelum commit.' }
         },
         required: ['id', 'reason']
@@ -132,7 +133,7 @@ export const definition = {
 
 export async function execute(params) {
     const traceId = uuidv4();
-    const { id, reason, remove_text: removeText, remove_section: removeSection, remove_all: removeAll = false, dry_run: dryRun = false } = params;
+    const { id, reason, remove_text: removeText, remove_section: removeSection, remove_all: removeAll = false, keep_one: keepOne = false, dry_run: dryRun = false } = params;
 
     if (!id) {
         return { ok: false, meta: { trace_id: traceId, error: 'id required' } };
@@ -176,6 +177,11 @@ export async function execute(params) {
                 }
                 newBody = removeAll ? body.replaceAll(removeText, '') : body.replace(removeText, '');
                 removedChars = removeText.length * (removeAll ? occurrences : 1);
+                // keep_one: re-insert 1 occurrence after removing all (keep the last one)
+                if (removeAll && keepOne && occurrences > 1) {
+                    newBody = newBody + '\n' + removeText;
+                    removedChars = removeText.length * (occurrences - 1);
+                }
             }
 
             if (removeSection) {

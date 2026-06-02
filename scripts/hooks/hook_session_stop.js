@@ -208,8 +208,12 @@ async function main() {
             const sessionLogHeader = '## SESSION LOG';
             let newBody;
 
-            if (body.includes(sessionLogHeader)) {
-                const slIdx = body.indexOf(sessionLogHeader);
+            // v8.9.2: Use regex to find REAL section header (at start of line)
+            // Prevents matching "## SESSION LOG" inside _CHANGELOG text like:
+            // "- 2026-05-20 v5: replaced ## SESSION LOG (500 → 800 chars)"
+            const slMatch = body.match(/^## SESSION LOG\s*$/m);
+            if (slMatch) {
+                const slIdx = slMatch.index;
                 const slEnd = findSectionEnd(body, slIdx);
                 let existingLog = body.substring(slIdx, slEnd);
                 if (existingLog.length > SESSION_LOG_MAX_SIZE) {
@@ -219,6 +223,21 @@ async function main() {
                 }
                 // Strip accumulated rotation markers (keep none — new rotation adds fresh one)
                 existingLog = existingLog.replace(/\[[\d-]+\] SESSION LOG rotated[^\n]*\n\n?/g, '');
+
+                // v8.9.3: DEDUP — if session with same start-time exists, REPLACE it (not append)
+                const startTimeMatch = summary.match(/^### Session (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})/);
+                if (startTimeMatch) {
+                    const startTime = startTimeMatch[1];
+                    const existingEntryRegex = new RegExp(`### Session ${startTime.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[^]*?(?=### Session |$)`, 'g');
+                    const existingMatches = existingLog.match(existingEntryRegex);
+                    if (existingMatches && existingMatches.length > 0) {
+                        // Replace ALL existing entries for this start-time with the new (most complete) one
+                        existingLog = existingLog.replace(existingEntryRegex, '');
+                        existingLog = existingLog.replace(/\n{3,}/g, '\n\n');
+                        hookLog('INFO', 'Stop: replaced existing session entry (dedup)', { startTime, replaced: existingMatches.length });
+                    }
+                }
+
                 newBody = body.substring(0, slIdx) + existingLog.trimEnd() + '\n\n' + summary + '\n\n' + body.substring(slEnd);
             } else {
                 const autoLogIdx = body.indexOf('## _AUTO_LOG');
