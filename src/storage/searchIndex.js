@@ -303,11 +303,11 @@ export function ftsSearch(queryStr, options = {}) {
     if (!db || !indexReady) return null; // Fallback signal
 
     const { limit = 50 } = options;
-    const words = (queryStr || '').toLowerCase().split(/\s+/).filter(w => w.length >= 2);
+    const words = (queryStr || '').substring(0, 300).toLowerCase().split(/\s+/).filter(w => w.length >= 2 && w.length <= 60);
     if (words.length === 0) return null;
 
     try {
-        const ftsTokens = words.slice(0, 8).map(w => `"${w}"*`);
+        const ftsTokens = words.slice(0, 8).map(w => `"${w.replace(/"/g, '')}"*`);
         const ftsQuery = `
             SELECT ri.id, ri.title, ri.tags, ri.updated_at, ri.file_size,
                    ri.access_count, ri.success, ri.verified,

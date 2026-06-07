@@ -566,7 +566,9 @@ export async function execute(params) {
                         const oldText = item.replace_text;
                         const newText = content;
 
-                        const occurrences = body.split(oldText).length - 1;
+                        const changelogIdx = body.indexOf('## _CHANGELOG');
+                        const searchBody = changelogIdx > 0 ? body.substring(0, changelogIdx) : body;
+                        const occurrences = searchBody.split(oldText).length - 1;
                         if (occurrences === 0) {
                             results.push({
                                 id: actualFilename, version: meta.version || 1, status: 'error',
@@ -616,7 +618,14 @@ export async function execute(params) {
                             contradictions.push(`⚠️ TRUNCATION WARNING: replace_text mengganti ${oldText.length} chars dengan ${newText.length} chars (<30% original). Pastikan data valid tidak hilang. Old content preview: "${oldText.substring(0, 200)}..."`);
                         }
 
-                        const newBody = body.replace(oldText, newText);
+                        let newBody;
+                        if (changelogIdx > 0) {
+                            const beforeCL = body.substring(0, changelogIdx);
+                            const afterCL = body.substring(changelogIdx);
+                            newBody = beforeCL.replace(oldText, newText) + afterCL;
+                        } else {
+                            newBody = body.replace(oldText, newText);
+                        }
 
                         const now = new Date().toISOString().split('T')[0];
                         const changelogEntry = `- ${now} v${(meta.version || 1) + 1}: replace_text (${oldText.length} → ${newText.length} chars)`;
@@ -790,6 +799,12 @@ export async function execute(params) {
                             }
                         }
                         // Deduplicate entries with same normalized title (with/without date prefix)
+                        // Track duplicates for warning
+                        const titleCounts = new Map();
+                        for (const entry of allMatches) {
+                            const normalized = entry.header.replace(/^\[\d{4}[^\]]*\]\s*/, '').trim();
+                            titleCounts.set(normalized, (titleCounts.get(normalized) || 0) + 1);
+                        }
                         const seen = new Map();
                         for (const entry of allMatches) {
                             const normalized = entry.header.replace(/^\[\d{4}[^\]]*\]\s*/, '').trim();
@@ -826,6 +841,20 @@ export async function execute(params) {
                             }
                         }
 
+                        if (bestMatch) {
+                            const bestNorm = bestMatch.title.replace(/^\[\d{4}[^\]]*\]\s*/, '').trim();
+                            const dupCount = titleCounts.get(bestNorm) || 1;
+                            if (dupCount > 1) {
+                                results.push({
+                                    id: actualFilename, version: meta.version || 1, status: 'error',
+                                    action: 'replace_entry_ambiguous',
+                                    error: `DUPLICATE: ${dupCount} entries with title "${bestNorm.substring(0, 60)}". Gunakan memory_forget({remove_text:"..."}) untuk hapus duplikat dulu, atau replace_text untuk edit surgical.`,
+                                    candidates: [bestMatch.title]
+                                });
+                                continue;
+                            }
+                        }
+
                         if (!bestMatch || bestScore < 40) {
                             results.push({
                                 id: actualFilename, version: meta.version || 1, status: 'error',
@@ -836,7 +865,7 @@ export async function execute(params) {
                             continue;
                         }
 
-                        if (secondBestScore > 0 && bestScore < 100 && (bestScore - secondBestScore) < 15) {
+                        if (secondBestScore > 0 && (bestScore - secondBestScore) < 15) {
                             results.push({
                                 id: actualFilename, version: meta.version || 1, status: 'error',
                                 action: 'replace_entry_ambiguous',

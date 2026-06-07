@@ -257,7 +257,19 @@ export async function execute(params) {
                 }
             }
 
-            // Pass 2: If no exact match, try includes
+            // Pass 2: If no exact match, try word-boundary startsWith
+            // "RE" must match "RE-ENTRY" (word boundary at -) but NOT "RECON" (no boundary after RE)
+            if (matched.length === 0) {
+                for (const s of majorSections) {
+                    const clean = s.cleanName.toLowerCase();
+                    if (clean.startsWith(sectionLower) && (clean.length === sectionLower.length || /[\s\-/&(]/.test(clean[sectionLower.length]))) {
+                        matched.push(s.content);
+                        matchedNames.push(s.name);
+                    }
+                }
+            }
+
+            // Pass 3: fallback includes (for partial names not caught by word-boundary)
             if (matched.length === 0) {
                 for (const s of majorSections) {
                     if (s.cleanName.toLowerCase().includes(sectionLower)) {

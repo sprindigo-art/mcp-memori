@@ -305,9 +305,8 @@ export function appendToSection(body, sectionName, newContent) {
     // This aligns with isMajorSection which recognizes "RECON / DISCOVERY" as RECON variant
     const headerRegex = new RegExp(`^${escapedHeader}(?:\\s*$|\\s+[/&(])`, 'im');
 
-    // Downgrade ## to ### in appended content — ONLY keep standard section names as ##
-    // Everything else (## TARGET:, ## DATE:, ## METHOD:, ## CREDENTIALS:, etc) → ###
-    newContent = newContent.replace(/^(##) (?!(?:RECON|CREDENTIAL|EXPLOIT|GAGAL|LIVE STATUS|RE-?ENTRY CHECKLIST|SESSION LOG|_AUTO_LOG|_CHANGELOG|INFO|PERSISTENCE|OBJECTIVE|NETWORK MAP|PIVOT|LOOT|ACTIVITY SUMMARY|PAYMENT FLOW)\s*$)/gim, '### ');
+    // Downgrade ALL ## to ### in appended content — content inside a section must NEVER create new section boundaries
+    newContent = newContent.replace(/^## /gm, '### ');
 
     let overlapWarning = null;
 
@@ -510,12 +509,12 @@ export function appendToSection(body, sectionName, newContent) {
         const newTitleMatch = stampedContent.match(/^(?:\[\d{4}[^\]]*\]\s*)?###\s+(.+)/m);
         if (newTitleMatch) {
             const stripIPFromTitle = t => t.replace(/\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/g, '').replace(/[()]/g, '');
-            const newWords = stripIPFromTitle(newTitleMatch[1]).toLowerCase().replace(/[^a-z0-9\s]/g, '').trim().split(/\s+/).filter(w => w.length >= 3);
+            const newWords = stripIPFromTitle(newTitleMatch[1]).toLowerCase().replace(/[^a-z0-9\s]/g, '').trim().split(/\s+/).filter(w => w.length >= 3 || /^\d+$/.test(w));
             if (newWords.length >= 1) {
                 const existingTitles = (existingSection.match(/^(?:\[\d{4}[^\]]*\]\s*)?###\s+.+$/gm) || []).map(t => t.replace(/^\[\d{4}[^\]]*\]\s*/, ''));
                 const minOverlap = newWords.length === 1 ? 1 : 2;
                 for (const entry of existingTitles) {
-                    const entryWords = stripIPFromTitle(entry.replace(/^###\s+/, '')).toLowerCase().replace(/[^a-z0-9\s]/g, '').trim().split(/\s+/).filter(w => w.length >= 3);
+                    const entryWords = stripIPFromTitle(entry.replace(/^###\s+/, '')).toLowerCase().replace(/[^a-z0-9\s]/g, '').trim().split(/\s+/).filter(w => w.length >= 3 || /^\d+$/.test(w));
                     const overlap = newWords.filter(w => entryWords.includes(w)).length;
                     const overlapRatio = overlap / Math.max(newWords.length, 1);
                     if (overlap >= minOverlap && overlapRatio >= 0.5) {
