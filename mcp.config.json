@@ -1,7 +1,7 @@
 {
     "name": "mcp-memori",
-    "version": "8.9.2",
-    "description": "MCP Memory Server v8.9.2 — File-based .md Runbooks + Hybrid Search (FTS5+Vector+RRF) + 5 Lifecycle Hooks + Overlap Detection + 3-Layer Dedup + Hard-block + Contradiction Detection + Per-session Isolation",
+    "version": "8.9.4",
+    "description": "MCP Memory Server v8.9.4 — File-based .md Runbooks + Smart memory_get (inline critical sections + auto-unlock) + Outcome Tags [SUCCESS/FAIL/FOUND/ACCESS] + Hybrid Search (FTS5+Vector+RRF) + 5 Lifecycle Hooks + Overlap Detection + 3-Layer Dedup + Hard-block + Contradiction Detection + Per-session Isolation",
     "transport": {
         "type": "stdio"
     },

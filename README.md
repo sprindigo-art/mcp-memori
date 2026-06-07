@@ -1,4 +1,4 @@
-# MCP Memori v8.9.2
+# MCP Memori v8.9.4
 
 Production-grade MCP Memory Server for Claude Code — persistent runbook-based knowledge engine with hybrid search, lifecycle hooks, and anti-data-loss enforcement.
 
@@ -23,7 +23,7 @@ Claude Code has no persistent memory between sessions. Context is lost on every 
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                MCP Memori v8.9.2 — Runbook Engine            │
+│                MCP Memori v8.9.4 — Runbook Engine            │
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
 │  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐         │
@@ -62,10 +62,10 @@ Claude Code has no persistent memory between sessions. Context is lost on every 
 │  ┌───────────────────────────────────────────────────────┐  │
 │  │ HOOKS (5 lifecycle events)                            │  │
 │  │ SessionStart:      inject target context + auto-log   │  │
-│  │ PostToolUse:       auto-capture + writeback counter   │  │
-│  │ UserPromptSubmit:  auto-inject relevant memories      │  │
+│  │ PostToolUse:       auto-capture + outcome tags + wb   │  │
+│  │ UserPromptSubmit:  active-target-priority injection   │  │
 │  │ Stop:             template session summary + rotate   │  │
-│  │ PreCompact:       identity + rules + target context   │  │
+│  │ PreCompact:       identity + rules + KEY OUTCOMES     │  │
 │  └───────────────────────────────────────────────────────┘  │
 │                                                             │
 │  ┌───────────────┐  ┌───────────┐  ┌───────────────────┐   │
@@ -119,7 +119,21 @@ Query → ┌─ FTS5 BM25 (noise-filtered, porter stemmer) ─────┐
 - **Stop** — template-based session summary appended to `## SESSION LOG`; auto-rotate >50KB (keep last 10, archive rest); lock-protected atomic write
 - **PreCompact** — fsync flush + compaction marker + identity + rules + LIVE STATUS(2000 chars) + RE-ENTRY(1500) + GAGAL(800) + recent 12 auto-log + CREDENTIAL/EXPLOIT entry titles + safe credential pointer in `newCustomInstructions`
 
-### v8.9.2 (Latest)
+### v8.9.4 (Latest)
+- **Smart `memory_get` for >50KB** — returns SMART OVERVIEW + inline LIVE STATUS/GAGAL/OBJECTIVE + CREDENTIAL entry titles + AUTO-UNLOCK. AI gets actionable data in 1 call (was: overview-only, needed 2-5 extra Read calls)
+- **Auto-unlock** — inline critical sections count as reads → `hasBeenRead()` returns true after single `memory_get`. Workflow reduced from 7-10 tool calls to 2-3
+- **Max 2 reminders** — upsert response prioritizes CRITICAL reminders (TRUNCATION/OVERLAP/CONTRADICTION), suppresses LOW (DUAL-SAVE/CEK EXISTING). Prevents alert fatigue
+- **replace_text truncation WARNING** — warns when replacing >100 chars with <30% of original. Shows old content preview
+- **Code-block `###` boundary** — `replace_entry` now skips `###` headings inside ` ``` ` code blocks (was: split entry at code-block `###`)
+- **Section variant fallback** — `RECON / DISCOVERY` appends to existing `## RECON` instead of creating duplicate section
+- **Fuzzy match anti-suffix** — `target2` no longer merges into `target`. Domain match (`bappenas` → `bappenas.go.id`) still works
+- **resolveActiveTarget fallback** — new sessions after reboot fallback to most recent target from persistent map (was: null → 835 chars empty context). Compaction output: 835 → 5458 chars
+- **Auto-tag `_AUTO_LOG` outcomes** — entries tagged `[SUCCESS]`, `[FAIL]`, `[FOUND]`, `[ACCESS]` based on response content
+- **PreCompact smart filter** — injects tagged outcome entries instead of raw last-12 commands. Label: `KEY OUTCOMES — what succeeded/failed/found`
+- **UserPromptSubmit active target priority** — search results from active target always ranked first in context injection
+- **Production duplicate sections cleaned** — merged 8 duplicate `##` sections in 3 runbooks (sdccd, sipena, Local_Claude)
+
+### v8.9.2
 - **Overlap detection BLOCK** — title ≥70% word match + IP same OR 2+ identifiers including IP = `overlap_blocked` (data NOT written). 50-69% = WARN (data written). Response includes existing_entry + fix_update command
 - **`existing_entries` in response** — every successful append returns list of all `### title` in section (including date-prefixed entries) so AI sees what already exists
 - **Anti-bypass enforcement** — overlap_blocked is protection, not a bug. CLAUDE.md rules explicitly forbid Write/Edit/Bash bypass to runbook .md files
@@ -180,7 +194,7 @@ Query → ┌─ FTS5 BM25 (noise-filtered, porter stemmer) ─────┐
 | Tool | Purpose |
 |------|---------|
 | `memory_search` | Hybrid search: FTS5 + vector + RRF + domain reranking + credential snippets. Returns structured results with `next_call` |
-| `memory_get` | Read runbook with pagination, section filter, `search` param for entry lookup, health warnings. Unlocks hard-block |
+| `memory_get` | Read runbook: >50KB = smart overview + inline LIVE STATUS/GAGAL + credential titles + auto-unlock; <50KB = full content. Section filter, `search` param, health warnings |
 | `memory_upsert` | Write/update with section-aware append, hard-block, fuzzy match, contradiction detect, `memory_type` auto-routing, `replace_entry` with ambiguity guard |
 | `memory_forget` | Delete text/section/file with read-before-delete enforcement, `dry_run` preview, occurrence guard |
 | `memory_verify` | Read-only pre-write check: duplicate, near-duplicate, contradiction, staleness. Deterministic RUNBOOK-first target resolution |
@@ -328,7 +342,7 @@ Auto-generated tool call journal
 
 ## Comparison
 
-| Feature | MCP Memori v8.9.2 | claude-mem | Mem0 | doobidoo/mcp-memory |
+| Feature | MCP Memori v8.9.4 | claude-mem | Mem0 | doobidoo/mcp-memory |
 |---------|-----------------|------------|------|---------------------|
 | Storage | `.md` runbooks (readable, git-friendly) | SQLite DB | Vector cloud | SQLite |
 | Search | FTS5 + Vector v2.0 + RRF + domain-rank | FTS5 + ChromaDB | Vector + Graph | Vector only |
@@ -339,7 +353,9 @@ Auto-generated tool call journal
 | Anti-duplicate | 3-layer (exact+near-50%+SHA256) + overlap block | SHA256 only | Partial | No |
 | Contradiction detect | 32 pairs bidirectional EN+ID | No | No | No |
 | Lifecycle hooks | 5 hooks + writeback counter | 6 hooks | No | No |
-| Post-compaction | Auto-inject + identity + re-authorization | Context inject | No | No |
+| Post-compaction | Smart inject (5458 chars: identity+status+gagal+outcomes+creds) | Context inject | No | No |
+| Outcome tags | [SUCCESS/FAIL/FOUND/ACCESS] auto-tag | No | No | No |
+| Smart memory_get | Inline critical sections + auto-unlock for >50KB | No | No | No |
 | Session isolation | Per-session (multi-instance safe) | No | No | No |
 | Vector granularity | Per-section (746 vectors) | Per-field | Per-doc | Per-doc |
 | Knowledge graph | Local (4,061 entities, 6,893 links) | No | Cloud | No |
