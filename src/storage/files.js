@@ -305,8 +305,14 @@ export function appendToSection(body, sectionName, newContent) {
     // This aligns with isMajorSection which recognizes "RECON / DISCOVERY" as RECON variant
     const headerRegex = new RegExp(`^${escapedHeader}(?:\\s*$|\\s+[/&(])`, 'im');
 
-    // Downgrade ALL ## to ### in appended content — content inside a section must NEVER create new section boundaries
-    newContent = newContent.replace(/^## /gm, '### ');
+    // Downgrade ALL ## to ### in appended content — but SKIP lines inside code blocks
+    const _lines = newContent.split('\n');
+    let _inCode = false;
+    for (let _i = 0; _i < _lines.length; _i++) {
+        if (_lines[_i].startsWith('```')) _inCode = !_inCode;
+        if (!_inCode && _lines[_i].startsWith('## ')) _lines[_i] = '###' + _lines[_i].substring(2);
+    }
+    newContent = _lines.join('\n');
 
     let overlapWarning = null;
 
