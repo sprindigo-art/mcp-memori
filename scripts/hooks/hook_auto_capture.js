@@ -10,7 +10,7 @@
  *
  * HARD CONSTRAINTS:
  * - Never writes to section state (memory_autolog enforces _AUTO_LOG only)
- * - Scrubs password/token/JWT patterns via scrubber.js
+ * - Strips SSH key blocks only (passwords/credentials preserved for AI continuity)
  * - Truncates to 3KB max per entry
  * - Dedup last 5 entries (anti-repeat spam)
  */
@@ -87,8 +87,16 @@ async function main() {
         const raw = `${inputSummary}${responseSummary ? ' | ' + responseSummary : ''}`;
         const { text: cleaned, redactions } = cleanForLog(raw, 2500);
 
+        const _outcomeLower = (responseSummary || '').toLowerCase();
+        const outcomeTag = /root@|uid=0|shell obtained|rce confirm|admin share|success.*exploit/i.test(_outcomeLower) ? 'ACCESS'
+            : /password|passwd|sshpass|credential|api[_-]?key|token[:\s=]|secret[:\s=]|\.env\b/i.test(_outcomeLower) ? 'FOUND'
+            : /200 ok|completed success|berhasil|success|uploaded|created|started/i.test(_outcomeLower) ? 'SUCCESS'
+            : /failed|denied|refused|timeout|blocked|403|404|500|error:|gagal|patched|unreachable/i.test(_outcomeLower) ? 'FAIL'
+            : '';
+        const tagPrefix = outcomeTag ? `[${outcomeTag}] ` : '';
+
         const note = redactions > 0 ? ` [${redactions} redacted]` : '';
-        const entry = cleaned + note;
+        const entry = tagPrefix + cleaned + note;
 
         // v8.7: Auto-detect target — only switch on WRITE intent (upsert) or when no target set
         // memory_get on different target = reference read, NOT a focus switch

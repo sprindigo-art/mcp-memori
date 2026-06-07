@@ -4,11 +4,13 @@
  * v7.0: LRU cache untuk reduce filesystem I/O
  * @module mcp/tools/memory.get
  */
-import { readRunbook, isMajorSection } from '../../storage/files.js';
+import { readRunbook, isMajorSection, RUNBOOKS_DIR } from '../../storage/files.js';
 import { confirmRead } from './memory.forget.js';
 import { incrementAccessCount } from '../../storage/searchIndex.js';
 import logger from '../../utils/logger.js';
 import { LRUCache } from 'lru-cache';
+import { existsSync, statSync } from 'fs';
+import { join } from 'path';
 
 const MAX_OUTPUT_CHARS = 20000; // 20K chars ≈ 30-35KB JSON after escaping — safely under 50KB harness limit
 
@@ -20,10 +22,11 @@ const MAX_OUTPUT_CHARS = 20000; // 20K chars ≈ 30-35KB JSON after escaping —
  */
 const getCache = new LRUCache({
     max: 150,
-    ttl: 3 * 60 * 1000,
+    ttl: 30 * 1000,
     updateAgeOnGet: true,
     allowStale: false
 });
+const cacheMtimes = new Map();
 
 let cacheHits = 0;
 let cacheMisses = 0;
@@ -32,7 +35,7 @@ let cacheMisses = 0;
  * Invalidate cache entry (called from upsert/forget)
  */
 export function invalidateGetCache(id) {
-    if (id) getCache.delete(id);
+    if (id) { getCache.delete(id); cacheMtimes.delete(id); }
 }
 
 /**
@@ -40,6 +43,7 @@ export function invalidateGetCache(id) {
  */
 export function clearGetCache() {
     getCache.clear();
+    cacheMtimes.clear();
 }
 
 /**
@@ -139,6 +143,20 @@ export async function execute(params) {
         if (useCache) {
             item = getCache.get(id);
             if (item) {
+                try {
+                    const fp = join(RUNBOOKS_DIR, id);
+                    if (existsSync(fp)) {
+                        const curMtime = statSync(fp).mtimeMs;
+                        const cachedMtime = cacheMtimes.get(id);
+                        if (cachedMtime && curMtime > cachedMtime) {
+                            getCache.delete(id);
+                            cacheMtimes.delete(id);
+                            item = null;
+                        }
+                    }
+                } catch {}
+            }
+            if (item) {
                 cacheHits++;
                 logger.debug('CACHE HIT', { id, hits: cacheHits });
             }
@@ -149,6 +167,7 @@ export async function execute(params) {
             item = readRunbook(id);
             if (item && useCache) {
                 getCache.set(id, item);
+                try { cacheMtimes.set(id, statSync(join(RUNBOOKS_DIR, id)).mtimeMs); } catch {}
             }
         }
 
@@ -205,7 +224,8 @@ export async function execute(params) {
             const result = selectedLines.map((l, i) => `${String(startLine + i).padStart(5)}│ ${l}`).join('\n');
             const charsRead = selectedLines.join('\n').length;
 
-            confirmRead(item.id, charsRead > 500 ? 'full' : 'section', charsRead);
+            const allRead = startLine === 1 && endLine >= totalLines;
+            confirmRead(item.id, allRead ? 'full' : 'partial', charsRead);
 
             const hasMore = endLine < totalLines;
             let header = `# ${item.title} — Lines ${startLine}-${endLine} of ${totalLines}`;
@@ -339,20 +359,42 @@ export async function execute(params) {
                 const bodyOnly = (s.content || '').replace(/^##[^\n]*\n/, '').trim();
                 const preview = bodyOnly.substring(0, 120).replace(/\n/g, ' ').trim();
                 const entryCount = (s.content || '').match(/^(?:\[\d{4}[^\]]*\]\s*)?###\s+/gm)?.length || 0;
-                return `- **${s.cleanName}** (~${Math.round(size/1024)}KB, ${entryCount} entries) — ${preview}${bodyOnly.length > 120 ? '...' : ''}`;
+                const entryTitles = (s.content || '').match(/^(?:\[\d{4}[^\]]*\]\s*)?###\s+.+$/gm) || [];
+                const lastTitles = entryTitles.slice(-5).map(t => t.replace(/^\[\d{4}[^\]]*\]\s*/, '### ').substring(0, 70));
+                const titlesStr = lastTitles.length > 0 ? `\n    Recent: ${lastTitles.join(' | ')}` : '';
+                return `- **${s.cleanName}** (~${Math.round(size/1024)}KB, ${entryCount} entries) — ${preview}${bodyOnly.length > 120 ? '...' : ''}${titlesStr}`;
             }).join('\n');
+
+            const INLINE_SECTIONS = ['LIVE STATUS', 'RE-ENTRY CHECKLIST', 'RE-ENTRY', 'GAGAL', 'OBJECTIVE'];
+            const INLINE_MAX_PER_SECTION = 1500;
+            const inlineParts = [];
+            let inlineTotalChars = 0;
+            for (const secName of INLINE_SECTIONS) {
+                const sec = majorSections.find(s => s.cleanName.toUpperCase().startsWith(secName));
+                if (!sec || !sec.content) continue;
+                const secBody = sec.content.substring(0, INLINE_MAX_PER_SECTION).trim();
+                if (secBody.length < 10) continue;
+                inlineParts.push(secBody + (sec.content.length > INLINE_MAX_PER_SECTION ? `\n... [${sec.content.length - INLINE_MAX_PER_SECTION} chars more — use memory_get section:"${sec.cleanName}" for full]` : ''));
+                inlineTotalChars += secBody.length;
+                confirmRead(item.id, 'section', secBody.length);
+            }
+            const inlineContent = inlineParts.length > 0
+                ? `\n\n## INLINE CRITICAL SECTIONS (${inlineParts.length} sections, ${inlineTotalChars} chars)\n\n${inlineParts.join('\n\n')}`
+                : '';
+
+            const credSection = majorSections.find(s => s.cleanName.toUpperCase().startsWith('CREDENTIAL'));
+            const credTitles = credSection ? (credSection.content.match(/^(?:\[\d{4}[^\]]*\]\s*)?###\s+.+$/gm) || []).map(t => t.replace(/^\[\d{4}[^\]]*\]\s*/, '').substring(0, 80)) : [];
+            const credSummary = credTitles.length > 0 ? `\n\n## CREDENTIAL ENTRIES (${credTitles.length} total — use memory_get section:"CREDENTIAL" for full data)\n${credTitles.map(t => `- ${t}`).join('\n')}` : '';
 
             return {
                 __plaintext: true,
-                text: `# ${item.title} — UNLOCK + OVERVIEW\n\n`
-                    + `⛔ RUNBOOK BESAR (${Math.round(totalChars/1024)}KB) — content TIDAK ditampilkan di sini.\n`
-                    + `✅ Hard-block UNLOCKED — upsert diizinkan SETELAH baca ISI.\n`
-                    + `📖 WAJIB baca ISI via: \`Read /home/kali/Desktop/mcp-memori/runbooks/${item.id}\` bertahap (offset/limit)\n`
-                    + `   ATAU: \`memory_get({id:"${item.id}", section:"CREDENTIAL"})\` untuk section spesifik\n`
-                    + `🔍 Cari data spesifik: \`memory_search({query:"keyword", scope_id:"${item.id}"})\` atau \`memory_get({id:"${item.id}", section:"CREDENTIAL", search:"keyword"})\`\n`
-                    + `⛔ DILARANG claim "sudah baca utuh" — memory_get ini HANYA unlock, BUKAN baca isi.\n`
-                    + `⛔ DILARANG simpan tanpa baca ISI section dulu — cek existing entries sebelum append.\n\n`
+                text: `# ${item.title} — UNLOCK + SMART OVERVIEW\n\n`
+                    + `✅ UNLOCKED — upsert DIIZINKAN (LIVE STATUS/RE-ENTRY/GAGAL sudah ditampilkan di bawah).\n`
+                    + `📖 Untuk CREDENTIAL/EXPLOIT/RECON detail: \`memory_get({id:"${item.id}", section:"CREDENTIAL"})\` atau \`Read .md\` bertahap.\n`
+                    + `🔍 Cari data: \`memory_search({query:"keyword", scope_id:"${item.id}"})\`\n\n`
                     + `## Section Overview (${majorSections.length} sections, ${totalChars} chars total)\n${sectionOverview}`
+                    + inlineContent
+                    + credSummary
             };
         }
 

@@ -121,16 +121,29 @@ async function main() {
             process.exit(0);
         }
 
-        // Dedup by ID + filter by MIN_SCORE
+        // Dedup by ID + filter by MIN_SCORE + prioritize active target
+        const activeRbFile = activeTarget ? `RUNBOOK_${activeTarget.replace(/[^a-zA-Z0-9._-]/g, '_')}.md` : null;
         const seen = new Set();
         const relevant = [];
+        // Pass 1: active target results FIRST
+        if (activeRbFile) {
+            for (const r of results) {
+                if (r.score < MIN_SCORE) continue;
+                if (r.id !== activeRbFile) continue;
+                if (seen.has(r.id)) continue;
+                seen.add(r.id);
+                relevant.push(r);
+                if (relevant.length >= MAX_RESULTS) break;
+            }
+        }
+        // Pass 2: other results if slots remain
         for (const r of results) {
+            if (relevant.length >= MAX_RESULTS) break;
             if (r.score < MIN_SCORE) continue;
             const id = r.id;
             if (seen.has(id)) continue;
             seen.add(id);
             relevant.push(r);
-            if (relevant.length >= MAX_RESULTS) break;
         }
 
         if (relevant.length === 0) {

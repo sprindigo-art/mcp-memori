@@ -87,16 +87,20 @@ async function main() {
                     const hasCreds = rbBody.includes('## CREDENTIAL');
                     const rbFilename = rbPath.split('/').pop();
 
-                    // Extract last 12 auto-log entries for work continuity
-                    const autoLogRaw = extractSection('_AUTO_LOG', 6000);
+                    // Extract auto-log: TAGGED outcomes first, then recent entries as fallback
+                    const autoLogRaw = extractSection('_AUTO_LOG', 8000);
                     let recentWork = '';
                     if (autoLogRaw) {
                         const logLines = autoLogRaw.split('\n').filter(l => l.startsWith('- ['));
-                        const last12 = logLines.slice(-12);
-                        const cleaned = last12.map(l => {
-                            return l.replace(/\s*\|\s*\{[^}]{50,}\}.*$/, '').replace(/\s*\|\s*json\(\d+b\):.*$/, '').substring(0, 250);
-                        });
-                        if (cleaned.length > 0) recentWork = cleaned.join('\n');
+                        const cleanLine = l => l.replace(/\s*\|\s*\{[^}]{50,}\}.*$/, '').replace(/\s*\|\s*json\(\d+b\):.*$/, '').substring(0, 250);
+                        const tagged = logLines.filter(l => /\[(ACCESS|FOUND|SUCCESS|FAIL)\]/.test(l));
+                        if (tagged.length >= 3) {
+                            const recentTagged = tagged.slice(-12).map(cleanLine);
+                            recentWork = recentTagged.join('\n');
+                        } else {
+                            const last12 = logLines.slice(-12).map(cleanLine);
+                            if (last12.length > 0) recentWork = last12.join('\n');
+                        }
                     }
 
                     // v8.9: Extract recent ### entry titles from key sections
@@ -121,7 +125,11 @@ async function main() {
                     if (reentry) liveContext += `\n[RECONNECT STEPS]\n${reentry}\n`;
                     if (gagal) liveContext += `\n[FAILED TECHNIQUES — DO NOT REPEAT]\n${gagal}\n`;
                     if (recentFindings) liveContext += `\n[WHAT WAS FOUND — recent entries in runbook]\n${recentFindings}\n`;
-                    if (recentWork) liveContext += `\n[RECENT COMMANDS — last 8 actions before compact]\n${recentWork}\n`;
+                    if (recentWork) {
+                        const hasTagged = /\[(ACCESS|FOUND|SUCCESS|FAIL)\]/.test(recentWork);
+                        const label = hasTagged ? 'KEY OUTCOMES — what succeeded/failed/found' : 'RECENT COMMANDS — last actions before compact';
+                        liveContext += `\n[${label}]\n${recentWork}\n`;
+                    }
                     liveContext += `\n--- END RETRIEVED MEMORY ---\n`;
                     if (hasCreds) liveContext += `\n[SAVED AUTH] auth entries exist in runbook. Use memory_get({id:"${rbFilename}", section:"CREDENTIAL"}) when needed.\n`;
                 } catch (e) {

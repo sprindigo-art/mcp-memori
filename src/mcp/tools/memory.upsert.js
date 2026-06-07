@@ -467,6 +467,15 @@ export async function execute(params) {
                         if (overlapWarning) {
                             contradictions.push(overlapWarning);
                         }
+                        if (appendAction === 'blocked_nonstandard_section') {
+                            results.push({
+                                id: actualFilename, version: meta.version || 1, status: 'blocked',
+                                action: 'blocked_nonstandard_section', section: item.append_to_section, filepath,
+                                error: appendResult.nonStandardWarning
+                            });
+                            continue;
+                        }
+
                         if (appendResult.nonStandardWarning) {
                             contradictions.push(`⚠️ ${appendResult.nonStandardWarning}`);
                         }
@@ -601,6 +610,10 @@ export async function execute(params) {
                                 preview: oldText.substring(0, 150)
                             });
                             continue;
+                        }
+
+                        if (oldText.length > 100 && newText.length < oldText.length * 0.3) {
+                            contradictions.push(`⚠️ TRUNCATION WARNING: replace_text mengganti ${oldText.length} chars dengan ${newText.length} chars (<30% original). Pastikan data valid tidak hilang. Old content preview: "${oldText.substring(0, 200)}..."`);
                         }
 
                         const newBody = body.replace(oldText, newText);
@@ -833,11 +846,25 @@ export async function execute(params) {
                             continue;
                         }
 
-                        // Find entry end: next ### or next ## (major section)
+                        // Find entry end: next ### or next ## heading, SKIP those inside code blocks
                         const afterEntry = body.substring(bestMatch.index + bestMatch.title.length);
-                        const nextEntryMatch = afterEntry.match(/\n(?=(?:\[\d{4}[^\]]*\]\s*)?### |\n## )/);
-                        const entryEnd = nextEntryMatch
-                            ? bestMatch.index + bestMatch.title.length + nextEntryMatch.index
+                        const _entryLines = afterEntry.split('\n');
+                        let _inCodeBlock = false;
+                        let _entryBoundary = -1;
+                        let _charOff = 0;
+                        for (let _li = 0; _li < _entryLines.length; _li++) {
+                            const _line = _entryLines[_li];
+                            if (_line.startsWith('```')) _inCodeBlock = !_inCodeBlock;
+                            if (!_inCodeBlock && _li > 0) {
+                                if (/^(?:\[\d{4}[^\]]*\]\s*)?### /.test(_line) || /^## /.test(_line)) {
+                                    _entryBoundary = _charOff;
+                                    break;
+                                }
+                            }
+                            _charOff += _line.length + 1;
+                        }
+                        const entryEnd = _entryBoundary >= 0
+                            ? bestMatch.index + bestMatch.title.length + _entryBoundary
                             : body.length;
 
                         const oldEntry = body.substring(bestMatch.index, entryEnd);
@@ -1014,7 +1041,17 @@ export async function execute(params) {
     };
 
     if (reminders.length > 0) {
-        response.reminders = [...new Set(reminders)];
+        const uniqueReminders = [...new Set(reminders)];
+        const critical = uniqueReminders.filter(r => /TRUNCATION|OVERLAP BLOCKED|CONTRADICTION|BLOCKED|MISPLACED/.test(r));
+        const high = uniqueReminders.filter(r => !critical.includes(r) && /EXPLOIT BERHASIL|CREDENTIAL\/ACCESS|FAILURE DETECTED/.test(r));
+        const low = uniqueReminders.filter(r => !critical.includes(r) && !high.includes(r));
+        const MAX_REMINDERS = 2;
+        const prioritized = [...critical, ...high].slice(0, MAX_REMINDERS);
+        if (prioritized.length === 0 && low.length > 0) prioritized.push(low[0]);
+        if (low.length > prioritized.length) {
+            prioritized.push(`ℹ️ +${low.length - (prioritized.length > MAX_REMINDERS ? 0 : 0)} more reminders suppressed. Data tersimpan dengan benar.`);
+        }
+        response.reminders = prioritized;
     }
 
     return response;

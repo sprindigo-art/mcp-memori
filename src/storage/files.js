@@ -340,6 +340,15 @@ export function appendToSection(body, sectionName, newContent) {
 
     let match = headerRegex.exec(body);
     if (!match) {
+        const baseName = sectionName.replace(/^## /, '').replace(/\s*[/&(].*$/, '').trim();
+        if (baseName !== sectionName.replace(/^## /, '').trim() && baseName.length >= 3) {
+            const baseHeader = `## ${baseName}`;
+            const baseEscaped = baseHeader.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const baseRegex = new RegExp(`^${baseEscaped}(?:\\s*$|\\s+[/&(])`, 'im');
+            match = baseRegex.exec(body);
+        }
+    }
+    if (!match) {
         const inlineIdx = body.indexOf(sectionHeader);
         if (inlineIdx > 0) {
             body = body.substring(0, inlineIdx) + '\n' + body.substring(inlineIdx);
@@ -348,12 +357,16 @@ export function appendToSection(body, sectionName, newContent) {
     }
 
     if (!match) {
-        // Check if section name is in standard whitelist
+        // Check if section name is in standard whitelist — BLOCK non-standard
         const cleanName = sectionName.replace(/^## /, '').trim().toUpperCase();
         const isStandard = MAJOR_SECTION_PREFIXES.some(p => cleanName === p || cleanName.startsWith(p + ' /') || cleanName.startsWith(p + ' &'));
-        const nonStandardWarning = !isStandard
-            ? `NON_STANDARD_SECTION: "${sectionName}" bukan section standard. Gunakan salah satu: INFO, OBJECTIVE, RECON, NETWORK MAP, CREDENTIAL, EXPLOIT, PIVOT, PERSISTENCE, LOOT, GAGAL, LIVE STATUS, RE-ENTRY CHECKLIST`
-            : null;
+        if (!isStandard) {
+            return {
+                body,
+                action: 'blocked_nonstandard_section',
+                nonStandardWarning: `BLOCKED: "${sectionName}" bukan section standard. Gunakan salah satu: INFO, OBJECTIVE, RECON, NETWORK MAP, CREDENTIAL, EXPLOIT, PIVOT, PERSISTENCE, LOOT, PAYMENT FLOW, GAGAL, LIVE STATUS, RE-ENTRY CHECKLIST`
+            };
+        }
 
         let createContent = newContent.trim();
         const hasDate = /^\d{4}-\d{2}-\d{2}|^### \d{4}|^- \d{4}|^\[\d{4}/.test(createContent);
@@ -363,8 +376,7 @@ export function appendToSection(body, sectionName, newContent) {
         }
         return {
             body: body.trimEnd() + `\n\n${sectionHeader}\n${createContent}\n`,
-            action: 'section_created',
-            nonStandardWarning
+            action: 'section_created'
         };
     }
 
@@ -635,10 +647,22 @@ export function findByFuzzyTitle(newTitle) {
             const isGenericSuffix = /^(go\.id|ac\.id|or\.id|co\.id|com|net|org|edu)$/i.test(newTarget);
             const minRatio = newTarget.length >= 6 ? 0.3 : 0.4;
             if (!isGenericSuffix && newTarget.length >= 4 && existTarget.includes(newTarget) && newTarget.length >= existTarget.length * minRatio) {
+                const _fwdIdx = existTarget.indexOf(newTarget);
+                const _fwdPrefix = existTarget.substring(0, _fwdIdx);
+                const _fwdSuffix = existTarget.substring(_fwdIdx + newTarget.length);
+                if ((_fwdSuffix && /^[a-z0-9_-]+$/i.test(_fwdSuffix)) || (_fwdPrefix && /^[a-z0-9_-]+$/i.test(_fwdPrefix))) {
+                    continue;
+                }
                 logger.info('DOMAIN PARTIAL MATCH', { newTitle, matched: file, newTarget, existTarget });
                 return filepath;
             }
             if (existTarget.length >= 4 && newTarget.includes(existTarget) && existTarget.length >= newTarget.length * 0.4) {
+                const _revIdx = newTarget.indexOf(existTarget);
+                const _revPrefix = newTarget.substring(0, _revIdx);
+                const _revSuffix = newTarget.substring(_revIdx + existTarget.length);
+                if ((_revSuffix && /^[a-z0-9_-]+$/i.test(_revSuffix)) || (_revPrefix && /^[a-z0-9_-]+$/i.test(_revPrefix))) {
+                    continue;
+                }
                 logger.info('DOMAIN PARTIAL MATCH (reverse)', { newTitle, matched: file, newTarget, existTarget });
                 return filepath;
             }
