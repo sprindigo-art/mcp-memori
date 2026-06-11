@@ -41,19 +41,22 @@ const SNIPPET_UNIQUE_COMMON = new Set([
  * @param {string} originalQuery - Original user query (before expansion)
  * @returns {Array} Reranked results
  */
-function rerankResults(results, originalQuery) {
+function rerankResults(results, originalQuery, scopeId = '') {
     const queryWords = (originalQuery || '').toLowerCase().split(/\s+/).filter(w => w.length >= 2);
     if (queryWords.length === 0) return results;
 
     // v7.3: Dedup by ID — keep highest-scoring entry per file
-    const seen = new Map();
-    for (const item of results) {
-        const key = item.id || item.title;
-        if (!seen.has(key) || (item.score || 0) > (seen.get(key).score || 0)) {
-            seen.set(key, item);
+    // v8.9.2: Skip dedup when scope_id active (multi-snippet per section)
+    if (!scopeId) {
+        const seen = new Map();
+        for (const item of results) {
+            const key = item.id || item.title;
+            if (!seen.has(key) || (item.score || 0) > (seen.get(key).score || 0)) {
+                seen.set(key, item);
+            }
         }
+        results = [...seen.values()];
     }
-    results = [...seen.values()];
 
     // Extract target keywords (domain-like, not common technique words)
     const targetKeywords = queryWords.filter(k => !COMMON_TECHNIQUE_WORDS.has(k) && k.length >= 3);
@@ -146,6 +149,15 @@ function rerankResults(results, originalQuery) {
             }
         }
 
+        // v8.9.2: Recency boost — entries updated recently get slight scoring advantage
+        // Prevents stale entries from outranking fresh ones with equal relevance
+        if (item.updated_at) {
+            const daysSince = (Date.now() - new Date(item.updated_at).getTime()) / (1000 * 60 * 60 * 24);
+            if (daysSince <= 3) score *= 1.15;       // last 3 days: +15%
+            else if (daysSince <= 7) score *= 1.08;  // last week: +8%
+            else if (daysSince > 60) score *= 0.92;  // older than 2 months: -8%
+        }
+
         return { ...item, score: Math.round(score * 100) / 100 };
     }).sort((a, b) => {
         if (b.score !== a.score) return b.score - a.score;
@@ -203,9 +215,9 @@ export const definition = {
             query: { type: 'string', description: 'Search query' },
             tags: { type: 'array', items: { type: 'string' }, description: 'Filter by tags (OR logic)' },
             required_tags: { type: 'array', items: { type: 'string' }, description: 'Mandatory tags (AND logic)' },
-            limit: { type: 'number', description: 'Max results (default: 20)' },
+            limit: { type: 'number', description: 'Max results (default: 10, max: 10)' },
             offset: { type: 'number', description: 'Offset for pagination (default: 0)' },
-            scope_id: { type: 'string', description: 'Scope search to ONE specific runbook file' }
+            scope_id: { type: 'string', description: 'Scope search to ONE specific runbook file. Returns multi-snippet per section (CREDENTIAL, EXPLOIT, GAGAL dll) instead of 1 snippet per file. Use to find data across sections within a runbook.' }
         },
         required: ['query']
     }
@@ -217,14 +229,14 @@ export async function execute(params) {
         query: searchQuery,
         tags = [],
         required_tags: requiredTags = [],
-        limit: rawLimit = 20,
+        limit: rawLimit = 10,
         offset = 0,
         full_content: rawFullContent = false,
         scope_id: scopeId = ''
     } = params;
 
     const fullContent = false;
-    const limit = Math.min(rawLimit, 20);
+    const limit = Math.min(rawLimit, 10);
 
     try {
         // v7.0: Get more results for reranking, then apply post-processing
@@ -251,10 +263,13 @@ export async function execute(params) {
         }
 
         // v7.5: RRF merge if vector results available, else use FTS5 only
+        // v8.9.2: Skip RRF when scope_id active — file scan returns multi-section results
+        // that share same ID; RRF would collapse them back to 1
         let mergedResults;
-        if (vectorUsed && vectorResults.length > 0) {
+        if (scopeId) {
+            mergedResults = rawResults;
+        } else if (vectorUsed && vectorResults.length > 0) {
             mergedResults = rrfMerge(rawResults, vectorResults);
-            // v2.0: Carry matched_section from vector results
             const vecSectionMap = new Map();
             for (const vr of vectorResults) {
                 if (vr.matched_section) vecSectionMap.set(vr.id, vr.matched_section);
@@ -289,6 +304,8 @@ export async function execute(params) {
         }
         const queryWords = expandQueryWords(searchQuery);
         for (const item of mergedResults) {
+            // v8.9.2: scope_id multi-snippet already has per-section snippets — skip enrichment
+            if (item.matched_section && item.snippet) continue;
             // v8.2: DOMAIN_MATCH snippets — keep only if they also match other query words
             if (item.snippet && item.snippet.startsWith('\x00DOMAIN_MATCH\x00')) {
                 item.snippet = item.snippet.replace('\x00DOMAIN_MATCH\x00', '');
@@ -414,7 +431,7 @@ export async function execute(params) {
         }
 
         // v7.0: Apply reranking with target-tag boost
-        const reranked = rerankResults(mergedResults, searchQuery);
+        const reranked = rerankResults(mergedResults, searchQuery, scopeId);
 
         // v7.5: Graph enrichment — add related entities to results
         for (const item of reranked) {
@@ -446,6 +463,7 @@ export async function execute(params) {
             if (item.snippet) {
                 compact.snippet = item.snippet.length > 500 ? item.snippet.substring(0, 500) + '...' : item.snippet;
             }
+            if (item.matched_section) compact.matched_section = item.matched_section;
             return compact;
         });
 
@@ -458,8 +476,10 @@ export async function execute(params) {
             const sizeKb = item.content_length ? Math.round(item.content_length / 1024) + 'KB' : '-';
             const snipRaw = (item.snippet || '').replace(/[\n\r]+/g, ' ').replace(/\s{2,}/g, ' ').trim();
             const snip = snipRaw.length > 300 ? snipRaw.substring(0, 297) + '...' : snipRaw;
-            outLines.push(`**${i + 1}. ${title}** (v${item.version || 1}, ${sizeKb}) — score: ${item.score}`);
+            const sectionTag = item.matched_section ? ` [${item.matched_section}]` : '';
+            outLines.push(`**${i + 1}. ${title}${sectionTag}** (v${item.version || 1}, ${sizeKb}) — score: ${item.score}`);
             outLines.push(`   ID: \`${item.id}\``);
+            if (item.matched_section) outLines.push(`   Section: \`${item.matched_section}\``);
             if (snip) outLines.push(`   > ${snip}`);
             outLines.push('');
         }
@@ -472,8 +492,12 @@ export async function execute(params) {
         }
 
         const structuredResults = compactResults.map(item => {
-            const next_call = { tool: 'memory_get', arguments: { id: item.id } };
-            return { id: item.id, title: item.title, score: item.score, snippet: item.snippet, next_call };
+            const next_call = item.matched_section
+                ? { tool: 'memory_get', arguments: { id: item.id, section: item.matched_section } }
+                : { tool: 'memory_get', arguments: { id: item.id } };
+            const result = { id: item.id, title: item.title, score: item.score, snippet: item.snippet, next_call };
+            if (item.matched_section) result.matched_section = item.matched_section;
+            return result;
         });
 
         return {

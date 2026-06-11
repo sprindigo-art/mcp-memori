@@ -98,16 +98,19 @@ async function main() {
         const note = redactions > 0 ? ` [${redactions} redacted]` : '';
         const entry = tagPrefix + cleaned + note;
 
-        // v8.7: Auto-detect target — only switch on WRITE intent (upsert) or when no target set
-        // memory_get on different target = reference read, NOT a focus switch
+        // v8.9.6: Target switch on FOCUS intent only (full RUNBOOK read or upsert)
+        // extractTargetFromToolCall already returns null for reference reads (section, TEKNIK, search)
         const detectedTarget = extractTargetFromToolCall(toolName, input.tool_input || input.input);
+        let targetSwitchWarning = null;
         if (detectedTarget && sessionId) {
-            const isUpsert = toolName.toLowerCase().includes('memory_upsert');
             const existing = getSessionTarget(sessionId);
-            if (isUpsert || !existing) {
+            if (detectedTarget !== existing && existing) {
+                targetSwitchWarning = `⚠️ TARGET SWITCH: ${existing} → ${detectedTarget}. RULES (CLAUDE.md line 160): SEBELUM pindah target WAJIB: (1) Writeback SEMUA data target "${existing}" yang belum disimpan, (2) Update LIVE STATUS target "${existing}". Jika belum writeback → memory_upsert SEKARANG sebelum lanjut ke target baru.`;
                 setSessionTarget(sessionId, detectedTarget);
-            } else if (detectedTarget !== existing) {
-                hookLog('INFO', 'Cross-target reference read (not switching)', { active: existing, read: detectedTarget });
+                hookLog('INFO', 'Target switched (focus intent)', { from: existing, to: detectedTarget });
+            } else if (!existing) {
+                setSessionTarget(sessionId, detectedTarget);
+                hookLog('INFO', 'Target set (first focus)', { target: detectedTarget });
             }
         }
 
@@ -157,7 +160,14 @@ async function main() {
 
         const isMemoryReadTool = /^(mcp__mcp-memori__)?(memory_search|memory_get|memory_list|memory_stats|memory_verify|memory_timeline)$/i.test(toolName);
 
-        if (hasMeaningfulData && counter > 0 && !isMemoryReadTool) {
+        if (targetSwitchWarning) {
+            process.stdout.write(JSON.stringify({
+                hookSpecificOutput: {
+                    hookEventName: 'PostToolUse',
+                    additionalContext: targetSwitchWarning
+                }
+            }));
+        } else if (hasMeaningfulData && counter > 0 && !isMemoryReadTool) {
             // Meaningful data detected — warn immediately
             const dataType = respLower.includes('password') || respLower.includes('credential') || respLower.includes('.env') ? 'CREDENTIAL'
                 : respLower.includes('root@') || respLower.includes('uid=0') || respLower.includes('superuser') ? 'PRIVILEGE ESCALATION'

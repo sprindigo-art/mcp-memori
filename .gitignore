@@ -22,3 +22,23 @@ Thumbs.db
 # Test artifacts
 test-artifacts/
 runbooks/
+
+# Private data (target info, credentials, cookies)
+cookies/
+data/
+.claude/
+indodax.txt
+scan-paypal-wallet.md
+target.md
+tehnik.md
+tier70.md
+FAILED
+SUCCESS
+null
+
+# Python cache
+__pycache__/
+scripts/hooks/__pycache__/
+
+# Misc junk
+"\n*

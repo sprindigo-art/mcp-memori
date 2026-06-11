@@ -5,7 +5,6 @@
  * @module mcp/tools/memory.verify
  */
 import { readRunbook, searchRunbooks, parseFrontmatter, findSectionEnd, isMajorSection, titleToFilename, RUNBOOKS_DIR } from '../../storage/files.js';
-import { scrub } from '../../utils/scrubber.js';
 import { readdirSync } from 'fs';
 import { basename } from 'path';
 import logger from '../../utils/logger.js';
@@ -259,7 +258,7 @@ export async function execute(params) {
                     results.verdict = 'near_duplicate';
                     results.evidence.matching_entries.push({
                         id: runbookId, title: '(near-duplicate detected)', section: scopedSection || 'file-wide',
-                        snippet: scrub(claim.substring(0, 200)).text, similarity: near.ratio / 100, reason: 'near'
+                        snippet: claim.substring(0, 200), similarity: near.ratio / 100, reason: 'near'
                     });
                     results.recommended_action = { action: 'skip', tool: 'none', arguments: {} };
                     break;
@@ -296,7 +295,7 @@ export async function execute(params) {
                     id: runbookId,
                     title: entry.title,
                     section: detectSection(body, body.indexOf(entry.text)),
-                    snippet: scrub(entry.text.substring(0, 200)).text,
+                    snippet: entry.text.substring(0, 200),
                     similarity: 0,
                     reason: results.verdict === 'contradicts' ? 'contradiction' : 'keyword_match'
                 });

@@ -233,15 +233,18 @@ function autoSaveTechnique(item) {
     const targetName = (item.title || '').replace(/^\[RUNBOOK\]\s*/i, '').trim();
     const now = new Date().toISOString().split('T')[0];
 
-    // Extract relevant lines (commands, outcomes)
+    // v8.9.6: Extract relevant lines — expanded keyword filter + higher limit
+    // OLD: 15 lines max + narrow keywords = full kill chain LOST
+    // FIX: 50 lines max + broad keywords covering install/deploy/config steps
     const relevantLines = content.split('\n')
-        .filter(l => /(?:command|berhasil|success|exploit|shell|root|rce|bypass|http|curl|wget|python)/i.test(l))
-        .slice(0, 15)
+        .filter(l => /(?:command|berhasil|success|exploit|shell|root|rce|bypass|http|curl|wget|python|step|install|apt|pip|npm|docker|systemctl|config|setup|deploy|mkdir|chmod|chown|scp|ssh|iptables|ufw|firewall|security.group|aws|gcloud|az\s|terraform|ansible|git\s|clone|nano|vim|echo|cat|tee|sed|awk|cron|service|enable|restart|reload|listen|port|bind|proxy|tunnel|ngrok|chisel|cloudflare|reverse|forward|kill.chain|prerequisite|require|depend|verify|confirm|test|check|endpoint|credential|password|key|token|secret)/i.test(l))
+        .slice(0, 50)
         .join('\n');
 
     if (!relevantLines.trim()) return null;
 
     // AUTO-SAVE to per-technique runbook: [TEKNIK] {nama}
+    // v8.9.6: Save FULL process (up to 50 lines), not brief summary
     try {
         const teknikContent = `\n### ${now} — Tested on: ${targetName}\n${relevantLines}\n- Status: SUCCESS\n`;
         const teknikTags = ['teknik', techniqueName.toLowerCase().replace(/[^a-z0-9]/g, '-'), targetName.toLowerCase().split('.')[0]];
@@ -252,10 +255,9 @@ function autoSaveTechnique(item) {
         // Also update FTS5 index for per-technique file
         try { updateIndexEntry(titleToFilename(`[TEKNIK] ${techniqueName}`)); } catch {}
 
-        // v7.2: ALSO save to consolidated registry: [TEKNIK] Teknik Berhasil Universal
-        // This is ONE file that collects ALL successful techniques for cross-target reuse
+        // v8.9.6: Consolidated registry — 20 lines (was 5), preserve full kill chain
         try {
-            const consolidatedEntry = `\n### ${now} — ${techniqueName} @ ${targetName}\n- Teknik: ${techniqueName}\n- Target: ${targetName}\n- Detail: ${relevantLines.split('\n').slice(0, 5).join(' | ')}\n- Status: SUCCESS\n`;
+            const consolidatedEntry = `\n### ${now} — ${techniqueName} @ ${targetName}\n- Teknik: ${techniqueName}\n- Target: ${targetName}\n- Detail:\n${relevantLines.split('\n').slice(0, 20).join('\n')}\n- Status: SUCCESS\n`;
             saveRunbook(
                 '[TEKNIK] Teknik Berhasil Universal',
                 consolidatedEntry,

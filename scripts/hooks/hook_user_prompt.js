@@ -11,7 +11,7 @@
  * - Output: stdout JSON { hookSpecificOutput: { hookEventName, additionalContext } }
  * - Exit 0 always (never block user)
  */
-import { readStdinJson, hookLog, resolveActiveTarget } from './hook_lib.js';
+import { readStdinJson, hookLog, resolveActiveTarget, setSessionTarget, setPersistentTarget } from './hook_lib.js';
 import { searchRunbooks, titleToFilename } from '../../src/storage/files.js';
 import { isIndexReady } from '../../src/storage/searchIndex.js';
 // NOTE: scrub REMOVED — snippets injected to Claude context must preserve
@@ -77,6 +77,7 @@ async function main() {
                 '# Memory Context (auto-injected)',
                 `**Active Target:** ${activeTarget}`,
                 `> SEBELUM jawab/action: \`memory_get({id:"${rbFile}"})\` → baca runbook UTUH.`,
+                `> memory_get saja BUKAN "sudah baca". WAJIB Read .md bertahap (offset/limit) untuk BACA ISI UTUH.`,
                 `> DILARANG jawab dari ingatan/tebakan. Semua data ada di memori.`
             ].join('\n');
             process.stdout.write(JSON.stringify({
@@ -103,6 +104,7 @@ async function main() {
                     '# Memory Context (auto-injected)',
                     `**Active Target:** ${activeTarget}`,
                     `> SEBELUM jawab/action: \`memory_get({id:"${rbFile}"})\` → baca runbook UTUH.`,
+                `> memory_get saja BUKAN "sudah baca". WAJIB Read .md bertahap (offset/limit) untuk BACA ISI UTUH.`,
                     `> DILARANG jawab dari ingatan/tebakan. Semua data ada di memori.`
                 ].join('\n');
                 process.stdout.write(JSON.stringify({
@@ -149,6 +151,18 @@ async function main() {
         if (relevant.length === 0) {
             process.stdout.write(emptyOutput());
             process.exit(0);
+        }
+
+        // v8.9.6: Update session target if top result is a RUNBOOK (not TEKNIK)
+        // This ensures auto-log goes to correct target when user mentions domain/IP
+        const topResult = relevant[0];
+        if (topResult && topResult.id && topResult.id.startsWith('RUNBOOK_') && sessionId) {
+            const newTarget = topResult.id.replace(/^RUNBOOK_/, '').replace(/\.md$/, '');
+            if (newTarget && newTarget !== activeTarget) {
+                setSessionTarget(sessionId, newTarget);
+                setPersistentTarget(newTarget, sessionId);
+                hookLog('INFO', 'UserPromptSubmit: target switched from prompt signal', { from: activeTarget, to: newTarget, score: topResult.score });
+            }
         }
 
         const sanitizeSnippet = (text) => text;

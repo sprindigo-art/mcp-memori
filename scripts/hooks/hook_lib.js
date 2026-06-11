@@ -117,16 +117,12 @@ function readPersistentTarget(sessionId = null) {
         // Support both old format (plain text) and new format (JSON)
         if (raw.startsWith('{')) {
             const data = JSON.parse(raw);
-            // Prefer session-specific target
+            // Prefer session-specific target (exact match only)
             if (sessionId && data.targets?.[sessionId]) return data.targets[sessionId];
-            // New session not in targets → fallback to MOST RECENT target from ANY session
-            // This ensures post-reboot/new-session still gets context from last active work
-            // Safe: targets map only contains entries set by THIS machine's hooks
-            if (sessionId && data.targets && Object.keys(data.targets).length > 0) {
-                const values = Object.values(data.targets).filter(v => v && typeof v === 'string' && v.length > 2);
-                if (values.length > 0) return values[values.length - 1];
-            }
-            if (sessionId) return data.last || null;
+            // v8.9.6 FIX: New session NOT in targets → return null (JANGAN fallback ke session lain)
+            // OLD BUG: values[values.length-1] mengambil target dari session/AI LAIN
+            // → menyebabkan cross-session contamination saat 2+ AI/VSCode bersamaan
+            if (sessionId) return null;
             return data.last || null;
         }
         return raw || null; // old plain-text format
@@ -145,6 +141,9 @@ export function extractTargetFromToolCall(toolName, toolInput) {
     if (name.includes('memory_get')) {
         const id = toolInput.id || '';
         if (id.startsWith('RUNBOOK_') && id.endsWith('.md') && !id.includes('UNIFIED')) {
+            // ONLY treat as focus switch if FULL runbook read (no section param)
+            // Section reads = reference only, do NOT switch target
+            if (toolInput.section || toolInput.sections_list || toolInput.search) return null;
             const t = id.replace(/^RUNBOOK_/, '').replace(/\.md$/, '');
             if (/^_?TEST|^_AUTO_LOG|^TEKNIK_/i.test(t)) return null;
             return t;

